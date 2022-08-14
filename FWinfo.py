@@ -1,8 +1,10 @@
 # Creator: Dex9999(4pda.to user) aka Dex aka EgorKin
+
 # V2.0 - improve parsing, now support Viofo A139 and 70Mai A500S firmwares
 # V2.1 - add LZ77 unpacker
 # V3.0 - add get info about partition names from fdt(dtb) partition
-
+# V3.1 - add MODELEXT INFO partition support
+ 
 
 import os, struct, sys, argparse, array
 from datetime import datetime
@@ -555,6 +557,28 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
                 fin.close()
         return temp_parttype
 
+
+    # MODELEXT info header and data
+    if partfirst4bytes == 0x38000000:
+        fin.seek(0xC, 1)
+        if(str(struct.unpack('8s', fin.read(8))[0])[2:-1] == 'MODELEXT'):
+            temp_parttype = 'MODELEXT INFO'
+
+            temp_parttype += ', Chip:\033[93m' + str(struct.unpack('8s', fin.read(8))[0]).replace("\\x00","")[2:-1] + '\033[0m'
+            fin.read(8)
+            temp_parttype += ', Build:\033[93m' + str(struct.unpack('8s', fin.read(8))[0]).replace("\\x00","")[2:-1] + '\033[0m'
+            uiLenght = struct.unpack('<I', fin.read(4))[0]
+            fin.seek(2, 1)
+            uiChkValue = struct.unpack('<H', fin.read(2))[0]
+            
+            if addinfo:
+                part_type.append(temp_parttype)
+                part_crc.append(uiChkValue)
+                part_crcCalc.append(MemCheck_CalcCheckSum16Bit(start_offset, uiLenght, 0x36))
+                fin.close()
+            return temp_parttype
+
+
     # BCL1
     if partfirst4bytes == 0x42434C31:
         temp_parttype = '\033[93mBCL1\033[0m'
@@ -781,8 +805,8 @@ def main():
 
     # если что-то нашли в dtb ты выводим расширенную информацию
     if len(dtbpart_ID) != 0:
-        print(" ---------------- partitions info -------------------------------------------------------------------------------------")
-        print("|  ID   Name            start_offset  end_offset         size       ORIG_CRC   CALC_CRC           type                 |")
+        print(" -------------------------------------------------- PARTITIONS INFO ---------------------------------------------------")
+        print("|  ID   Name            start_offset  end_offset         size       ORIG_CRC   CALC_CRC              type              |")
         print(" ----------------------------------------------------------------------------------------------------------------------")
     
         for a in range(partitions_count):
@@ -808,9 +832,9 @@ def main():
                 print("  %2i    %-15s  0x%08X - 0x%08X     %9i       0x%04X     \033[91m0x%04X\033[0m       %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
         print(" ----------------------------------------------------------------------------------------------------------------------")
     else:
-        print(" ---------------- partitions info -------------------------------------------------------------------")
-        print("|  ID   start_offset  end_offset         size       ORIG_CRC   CALC_CRC           type               |")
-        print(" ----------------------------------------------------------------------------------------------------")
+        print(" -------------------------------------------------- PARTITIONS INFO ---------------------------------------------------")
+        print("|  ID   start_offset  end_offset         size       ORIG_CRC   CALC_CRC                        type                    |")
+        print(" ----------------------------------------------------------------------------------------------------------------------")
     
         for a in range(partitions_count):
             if part_crc[a] != part_crcCalc[a]:
@@ -819,6 +843,12 @@ def main():
                     if part_type[a] == 'uboot':
                         fin = open(in_file, 'r+b')
                         fin.seek(part_startoffset[a] + 0x36E, 0)
+                        fin.write(struct.pack('<H', part_crcCalc[a]))
+                        fin.close()
+                    # fix CRC for MODELEXT
+                    if part_type[a][:13] == 'MODELEXT INFO':
+                        fin = open(in_file, 'r+b')
+                        fin.seek(part_startoffset[a] + 0x36, 0)
                         fin.write(struct.pack('<H', part_crcCalc[a]))
                         fin.close()
                     # fix CRC for CKSM
@@ -833,7 +863,7 @@ def main():
                 print("  %2i     0x%08X - 0x%08X     %9i       0x%04X     \033[92m0x%04X\033[0m       %s" % (part_id[a], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
             else:
                 print("  %2i     0x%08X - 0x%08X     %9i       0x%04X     \033[91m0x%04X\033[0m       %s" % (part_id[a], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
-        print(" ----------------------------------------------------------------------------------------------------")
+        print(" ----------------------------------------------------------------------------------------------------------------------")
 
 
 
