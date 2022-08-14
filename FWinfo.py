@@ -4,7 +4,8 @@
 # V2.1 - add LZ77 unpacker
 # V3.0 - add get info about partition names from fdt(dtb) partition
 # V3.1 - add MODELEXT INFO partition support
- 
+# V3.2 - initial support old frimware format (BCL1 starting partition + NVTPACK_FW_HDR)
+
 
 import os, struct, sys, argparse, array
 from datetime import datetime
@@ -677,52 +678,105 @@ def main():
     #os.system('color')
 
     # NVTPACK_FW_HDR2 GUID check
+    FW_HDR2 = 0
+    
     if struct.unpack('<I', fin.read(4))[0] == 0xD6012E07:
         if struct.unpack('<H', fin.read(2))[0] == 0x10BC:
             if struct.unpack('<H', fin.read(2))[0] == 0x4F91:
                 if struct.unpack('>H', fin.read(2))[0] == 0xB28A:
                     if struct.unpack('>I', fin.read(4))[0] == 0x352F8226:
                         if struct.unpack('>H', fin.read(2))[0] == 0x1A50:
-                            print("\033[93mNVTPACK_FW_HDR2\033[0m found")
+                            FW_HDR2 = 1
     
-    # NVTPACK_FW_HDR2_VERSION check
-    if struct.unpack('<I', fin.read(4))[0] == 0x16071515:
-        print("\033[93mNVTPACK_FW_HDR2_VERSION\033[0m found")
+    if FW_HDR2 == 1:
+        print("\033[93mNVTPACK_FW_HDR2\033[0m found")
     else:
-        print("\033[91mNVTPACK_FW_HDR2_VERSION\033[0m not found")
-        exit(0)
-    
-    NVTPACK_FW_HDR2_size = struct.unpack('<I', fin.read(4))[0]
-    partitions_count = struct.unpack('<I', fin.read(4))[0]
-    total_file_size = struct.unpack('<I', fin.read(4))[0]
-    checksum_method = struct.unpack('<I', fin.read(4))[0]
-    checksum_value = struct.unpack('<I', fin.read(4))[0]
-    print('Found \033[93m%i\033[0m partitions' % partitions_count)
-    print('Firmware file size \033[93m{:>11,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
-    
-    
-    # если есть команда извлечь или заменить или распаковать партицию то CRC не считаем чтобы не тормозить
-    if (is_extract == -1 & is_replace == -1 & is_uncompress == -1):
-        CRC_FW = MemCheck_CalcCheckSum16Bit(0, total_file_size, 0x24)
-        if checksum_value == CRC_FW:
-            print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
-        else:
-            print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m' % (checksum_value, CRC_FW))
-    
-    
-    # read partitions table info`
-    fin.seek(NVTPACK_FW_HDR2_size, 0)
-    
-    
+        print("\033[91mNVTPACK_FW_HDR2\033[0m not found")
+        fin.seek(0, 0)
+        if struct.unpack('>I', fin.read(4))[0] == 0x42434C31: # == BCL1
+            part_startoffset.append(0)
+            fin.seek(0xC, 0)
+            part_size.append(struct.unpack('>I', fin.read(4))[0] + 0x10)  # + 0x10 потому что мы будем показывать размер партиции с заголовком а не размер данных внутри BCL1
+            part_id.append(0)
+            part_endoffset.append(0 + part_size[0])
+            
+            fin.seek(part_size[0], 0)
+            #тут должен быть NVTPACK_FW_HDR
+            FW_HDR = 0
+            #проверим не в конце ли мы файла уже
+            if (fin.tell() + 0x10) < os.stat(in_file).st_size:
+                # если не в конце то проверяем дальше
+                if struct.unpack('<I', fin.read(4))[0] == 0x8827BE90:
+                    if struct.unpack('<H', fin.read(2))[0] == 0x36CD:
+                        if struct.unpack('<H', fin.read(2))[0] == 0x4FC2:
+                            if struct.unpack('>H', fin.read(2))[0] == 0xA987:
+                                if struct.unpack('>I', fin.read(4))[0] == 0x73A8484E:
+                                    if struct.unpack('>H', fin.read(2))[0] == 0x84B1:
+                                        FW_HDR = 1
+            if FW_HDR == 0:
+                print("\033[91mNVTPACK_FW_HDR\033[0m not found")
+                partitions_count = 1 # раз нет NVTPACK_FW_HDR значит у нас только 1 партиция - BCL1
+            else:
+                print("\033[93mNVTPACK_FW_HDR\033[0m found")
+                NVTPACK_FW_HDR_AND_PARTITIONS_size = struct.unpack('<I', fin.read(4))[0]
+                checksum = struct.unpack('<I', fin.read(4))[0]
+                partitions_count = struct.unpack('<I', fin.read(4))[0] + 1  # + 1 так как есть еще нулевая BCL1 партиция
+                print('Found \033[93m%i\033[0m partitions' % (partitions_count))
+
+                for a in range(partitions_count):
+                    a = 1 # так как нулевую партицию мы уже занесли в массивы
+                    part_startoffset.append(struct.unpack('<I', fin.read(4))[0])
+                    part_size.append(struct.unpack('<I', fin.read(4))[0])
+                    part_id.append(struct.unpack('<I', fin.read(4))[0])
+                    part_endoffset.append(part_startoffset[a] + part_size[a])
+        
+            # read each partition info
+            for a in range(partitions_count):
+                GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a])
+
+
+        fin.close()
 
     
+    if FW_HDR2 == 1:
+        # NVTPACK_FW_HDR2_VERSION check
+        if struct.unpack('<I', fin.read(4))[0] == 0x16071515:
+            print("\033[93mNVTPACK_FW_HDR2_VERSION\033[0m found")
+        else:
+            print("\033[91mNVTPACK_FW_HDR2_VERSION\033[0m not found")
+            exit(0)
+        
+        NVTPACK_FW_HDR2_size = struct.unpack('<I', fin.read(4))[0]
+        partitions_count = struct.unpack('<I', fin.read(4))[0]
+        total_file_size = struct.unpack('<I', fin.read(4))[0]
+        checksum_method = struct.unpack('<I', fin.read(4))[0]
+        checksum_value = struct.unpack('<I', fin.read(4))[0]
+        print('Found \033[93m%i\033[0m partitions' % partitions_count)
+        print('Firmware file size \033[93m{:>11,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
     
-    for a in range(partitions_count):
-        part_startoffset.append(struct.unpack('<I', fin.read(4))[0])
-        part_size.append(struct.unpack('<I', fin.read(4))[0])
-        part_id.append(struct.unpack('<I', fin.read(4))[0])
-        part_endoffset.append(part_startoffset[a] + part_size[a])
     
+        # если есть команда извлечь или заменить или распаковать партицию то CRC не считаем чтобы не тормозить
+        if (is_extract == -1 & is_replace == -1 & is_uncompress == -1):
+            CRC_FW = MemCheck_CalcCheckSum16Bit(0, total_file_size, 0x24)
+            if checksum_value == CRC_FW:
+                print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+            else:
+                print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m' % (checksum_value, CRC_FW))
+        
+        
+        # read partitions table info
+        fin.seek(NVTPACK_FW_HDR2_size, 0)
+        
+            
+        for a in range(partitions_count):
+            part_startoffset.append(struct.unpack('<I', fin.read(4))[0])
+            part_size.append(struct.unpack('<I', fin.read(4))[0])
+            part_id.append(struct.unpack('<I', fin.read(4))[0])
+            part_endoffset.append(part_startoffset[a] + part_size[a])
+    
+    
+    
+    # для всех - и для FW_HDR и для FW_HDR2
     
     # extract partition by ID to outputfile
     if is_extract != -1:
@@ -790,20 +844,22 @@ def main():
         exit(0)
 
 
+    if FW_HDR2 == 1:
+        # read each partition info
+        for a in range(partitions_count):
+            GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a])
+    
+        fin.close()
+    
+    
+        # looking into dtb partition for partition id - name - filename info
+        SearchPartNamesInDTB(partitions_count)
 
-    # read each partition info
-    for a in range(partitions_count):
-        GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a])
-
-    fin.close()
 
 
 
-    # looking into dtb partition for partition id - name - filename info
-    SearchPartNamesInDTB(partitions_count)
 
-
-    # если что-то нашли в dtb ты выводим расширенную информацию
+    # если что-то нашли в dtb то выводим расширенную информацию
     if len(dtbpart_ID) != 0:
         print(" -------------------------------------------------- PARTITIONS INFO ---------------------------------------------------")
         print("|  ID   Name            start_offset  end_offset         size       ORIG_CRC   CALC_CRC              type              |")
@@ -816,6 +872,12 @@ def main():
                     if part_type[a] == 'uboot':
                         fin = open(in_file, 'r+b')
                         fin.seek(part_startoffset[a] + 0x36E, 0)
+                        fin.write(struct.pack('<H', part_crcCalc[a]))
+                        fin.close()
+                    # fix CRC for MODELEXT
+                    if part_type[a][:13] == 'MODELEXT INFO':
+                        fin = open(in_file, 'r+b')
+                        fin.seek(part_startoffset[a] + 0x36, 0)
                         fin.write(struct.pack('<H', part_crcCalc[a]))
                         fin.close()
                     # fix CRC for CKSM
