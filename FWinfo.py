@@ -6,11 +6,14 @@
 # V3.1 - add MODELEXT INFO partition support
 # V3.2 - initial support old firmware format (BCL1 starting partition + NVTPACK_FW_HDR)
 # V3.3 - add optional start offset for -u command (uncompress partition); add -x ALL option, also start offset for -x now optional (do not need set it to 0)
+# V3.4 - add ZLIB uncompress support
 
 
 import os, struct, sys, argparse, array
 from datetime import datetime
-import subprocess
+import zlib
+#import subprocess
+
 
 in_file = ''
 in_offset = 0
@@ -275,8 +278,8 @@ def lz_uncompress(in_offset):
     # check compression algo - must be LZ (0x0009)
     fin.read(2)
     Algorithm = struct.unpack('>H', fin.read(2))[0]
-    if Algorithm!=0x09:
-        print("\033[91mCompression algo is not LZ, exit\033[0m")
+    if (Algorithm != 0x09) & (Algorithm != 0x0C):
+        print("\033[91mCompression algo %0X is not supported, exit\033[0m" % Algorithm)
         sys.exit(1)
 
 
@@ -288,87 +291,98 @@ def lz_uncompress(in_offset):
     in_offset = in_offset + 0x10 #skip BCL1 header
     fin.seek(in_offset, 0)
 
-	# Get marker symbol from input stream
-    marker = struct.unpack('B', fin.read(1))[0]
-    #print("LZ marker = 0x%0X" % marker)
-    inpos = 1
-
-    # Main decompression loop
-    outpos = 0;
-    while((inpos < insize) & (outpos < outsize)):
-        fin.seek(in_offset + inpos, 0)
-        symbol = struct.unpack('B', fin.read(1))[0]
-        inpos = inpos + 1
-
-        if symbol == marker:
-            # We had a marker byte
+    # LZ77 uncompress
+    if Algorithm == 0x09:
+        # Get marker symbol from input stream
+        marker = struct.unpack('B', fin.read(1))[0]
+        #print("LZ marker = 0x%0X" % marker)
+        inpos = 1
+    
+        # Main decompression loop
+        outpos = 0;
+        while((inpos < insize) & (outpos < outsize)):
             fin.seek(in_offset + inpos, 0)
-
-            if struct.unpack('B', fin.read(1))[0] == 0:
-                # It was a single occurrence of the marker byte
-                fout.write(struct.pack('B', marker))
-                outpos = outpos + 1
-                inpos = inpos + 1
-            else:
-                # Extract true length and offset
-				#inpos += lz_read_var_size( &length, &in[ inpos ] );
-                #=================================================
-                #print("curr file offset = 0x%0x" % (in_offset + inpos))
-                y = 0
-                num_bytes = 0
-                
+            symbol = struct.unpack('B', fin.read(1))[0]
+            inpos = inpos + 1
+    
+            if symbol == marker:
+                # We had a marker byte
                 fin.seek(in_offset + inpos, 0)
-                b = struct.unpack('B', fin.read(1))[0]
-                y = (y << 7) | (b & 0x0000007f)
-                num_bytes = num_bytes + 1
-                
-                while (b & 0x00000080) != 0:
-                    b = struct.unpack('B', fin.read(1))[0]
-                    y = (y << 7) | (b & 0x0000007f)
-                    num_bytes = num_bytes + 1
-
-                length = y;
-                inpos = inpos + num_bytes;
-                #=================================================
-                #print("length = 0x%0x" % (length))
-                
-				#inpos += lz_read_var_size( &offset, &in[ inpos ] );
-                #=================================================
-                y = 0
-                num_bytes = 0
-                
-                fin.seek(in_offset + inpos, 0)
-                b = struct.unpack('B', fin.read(1))[0]
-                y = (y << 7) | (b & 0x0000007f)
-                num_bytes = num_bytes + 1
-                
-                while (b & 0x00000080) != 0:
-                    b = struct.unpack('B', fin.read(1))[0]
-                    y = (y << 7) | (b & 0x0000007f)
-                    num_bytes = num_bytes + 1
-
-                offset = y;
-                inpos = inpos + num_bytes;
-                #=================================================
-                #print("offset = 0x%0x" % (offset))
-
-                # Copy corresponding data from history window
-                for i in range(length):
-                    #out[ outpos ] = out[ outpos - offset ];
-                    fout.seek(outpos - offset, 0)
-                    out = struct.unpack('B', fout.read(1))[0]
-                    
-                    fout.seek(outpos, 0)
-                    fout.write(struct.pack('B', out))
-                    
+    
+                if struct.unpack('B', fin.read(1))[0] == 0:
+                    # It was a single occurrence of the marker byte
+                    fout.write(struct.pack('B', marker))
                     outpos = outpos + 1
-        else:
-            # No marker, plain copy
-            fout.write(struct.pack('B', symbol))
-            outpos = outpos + 1
+                    inpos = inpos + 1
+                else:
+                    # Extract true length and offset
+                    #inpos += lz_read_var_size( &length, &in[ inpos ] );
+                    #=================================================
+                    #print("curr file offset = 0x%0x" % (in_offset + inpos))
+                    y = 0
+                    num_bytes = 0
+                    
+                    fin.seek(in_offset + inpos, 0)
+                    b = struct.unpack('B', fin.read(1))[0]
+                    y = (y << 7) | (b & 0x0000007f)
+                    num_bytes = num_bytes + 1
+                    
+                    while (b & 0x00000080) != 0:
+                        b = struct.unpack('B', fin.read(1))[0]
+                        y = (y << 7) | (b & 0x0000007f)
+                        num_bytes = num_bytes + 1
+    
+                    length = y;
+                    inpos = inpos + num_bytes;
+                    #=================================================
+                    #print("length = 0x%0x" % (length))
+                    
+                    #inpos += lz_read_var_size( &offset, &in[ inpos ] );
+                    #=================================================
+                    y = 0
+                    num_bytes = 0
+                    
+                    fin.seek(in_offset + inpos, 0)
+                    b = struct.unpack('B', fin.read(1))[0]
+                    y = (y << 7) | (b & 0x0000007f)
+                    num_bytes = num_bytes + 1
+                    
+                    while (b & 0x00000080) != 0:
+                        b = struct.unpack('B', fin.read(1))[0]
+                        y = (y << 7) | (b & 0x0000007f)
+                        num_bytes = num_bytes + 1
+    
+                    offset = y;
+                    inpos = inpos + num_bytes;
+                    #=================================================
+                    #print("offset = 0x%0x" % (offset))
+    
+                    # Copy corresponding data from history window
+                    for i in range(length):
+                        #out[ outpos ] = out[ outpos - offset ];
+                        fout.seek(outpos - offset, 0)
+                        out = struct.unpack('B', fout.read(1))[0]
+                        
+                        fout.seek(outpos, 0)
+                        fout.write(struct.pack('B', out))
+                        
+                        outpos = outpos + 1
+            else:
+                # No marker, plain copy
+                fout.write(struct.pack('B', symbol))
+                outpos = outpos + 1
+        fin.close()
+        fout.close()
+    
+    # ZLIB uncompress
+    if Algorithm == 0x0C:
+        dataread = fin.read(insize)
+        fin.close()
+        
+        decompress = zlib.decompress(dataread)
+        fout.write(decompress)
+        fout.close()
 
-    fin.close()
-    fout.close()
 
 
 def fillIDPartNames(startat):
