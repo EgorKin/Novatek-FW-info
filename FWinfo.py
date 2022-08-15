@@ -5,13 +5,15 @@
 # V3.0 - add get info about partition names from fdt(dtb) partition
 # V3.1 - add MODELEXT INFO partition support
 # V3.2 - initial support old firmware format (BCL1 starting partition + NVTPACK_FW_HDR)
-# V3.3 - add optional start offset for -u command (uncompress partition); add -x ALL option, also start offset for -x now optional (do not need set it to 0)
+# V3.3 - add optional start offset for -u command (uncompress partition); add -x ALL option, also start offset for -x and -u now optional (do not need set it to 0)
 # V3.4 - add ZLIB uncompress support
+# V3.5 - add LZMA uncompress support
 
 
 import os, struct, sys, argparse, array
 from datetime import datetime
 import zlib
+import lzma
 #import subprocess
 
 
@@ -261,7 +263,7 @@ def MemCheck_CalcCheckSum16Bit(in_offset, uiLen, ignoreCRCoffset):
     
    
 
-def lz_uncompress(in_offset):
+def BCL1_uncompress(in_offset):
     global in_file
     global out_file
     
@@ -278,8 +280,8 @@ def lz_uncompress(in_offset):
     # check compression algo - must be LZ (0x0009)
     fin.read(2)
     Algorithm = struct.unpack('>H', fin.read(2))[0]
-    if (Algorithm != 0x09) & (Algorithm != 0x0C):
-        print("\033[91mCompression algo %0X is not supported, exit\033[0m" % Algorithm)
+    if (Algorithm != 0x09) & (Algorithm != 0x0B) & (Algorithm != 0x0C):
+        print("\033[91mCompression algo %0X is not supported\033[0m" % Algorithm)
         sys.exit(1)
 
 
@@ -374,6 +376,19 @@ def lz_uncompress(in_offset):
         fin.close()
         fout.close()
     
+    # LZMA uncompress
+    if Algorithm == 0x0B:
+        dataread = fin.read(insize)
+        fin.close()
+        
+        decompress = decompress_lzma(dataread)[:outsize]
+        #tf = lzma.open('testfilename', 'rb', format = lzma.FORMAT_ALONE)
+        #decompress = tf.read(outsize)
+        #tf.close()
+        
+        fout.write(decompress)
+        fout.close()
+
     # ZLIB uncompress
     if Algorithm == 0x0C:
         dataread = fin.read(insize)
@@ -383,6 +398,27 @@ def lz_uncompress(in_offset):
         fout.write(decompress)
         fout.close()
 
+
+# use for lzma exception workaroud
+# see at https://stackoverflow.com/questions/37400583/python-lzma-compressed-data-ended-before-the-end-of-stream-marker-was-reached
+def decompress_lzma(data):
+    results = []
+    while True:
+        decomp = lzma.LZMADecompressor(lzma.FORMAT_ALONE, None, None)
+        try:
+            res = decomp.decompress(data)
+        except lzma.LZMAError:
+            if results:
+                break  # Leftover data is not a valid LZMA/XZ stream; ignore it.
+            else:
+                raise  # Error on the first iteration; bail out.
+        results.append(res)
+        data = decomp.unused_data
+        if not data:
+            break
+        if not decomp.eof:
+            raise lzma.LZMAError("Compressed data ended before the end-of-stream marker was reached")
+    return b"".join(results)
 
 
 def fillIDPartNames(startat):
@@ -878,7 +914,7 @@ def main():
         exit(0)
 
 
-    # uncompress partition by ID (if it possible, only LZ77 now)
+    # uncompress partition by ID (if compress algo is supported)
     if is_uncompress != -1:
         part_nr = -1
         for a in range(partitions_count):
@@ -891,7 +927,7 @@ def main():
             else:
                 print('Uncompress partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], in_file + '-uncomp_partitionID' + str(part_id[part_nr])))
             out_file = in_file + '-uncomp_partitionID' + str(part_id[part_nr])
-            lz_uncompress(part_startoffset[part_nr] + is_uncompress_offset)
+            BCL1_uncompress(part_startoffset[part_nr] + is_uncompress_offset)
             
         else:
             print('\033[91mCould not find partiton with ID %i\033[0m' % is_uncompress)
