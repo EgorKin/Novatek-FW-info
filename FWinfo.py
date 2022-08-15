@@ -5,6 +5,7 @@
 # V3.0 - add get info about partition names from fdt(dtb) partition
 # V3.1 - add MODELEXT INFO partition support
 # V3.2 - initial support old firmware format (BCL1 starting partition + NVTPACK_FW_HDR)
+# V3.3 - add optional start offset for -u command (uncompress partition); add -x ALL option, also start offset for -x now optional (do not need set it to 0)
 
 
 import os, struct, sys, argparse, array
@@ -158,9 +159,9 @@ def get_args():
 
     p = argparse.ArgumentParser(add_help=True, description='This script working with ARM-based Novatek firmware binary file. Creator: Dex9999(4pda.to user) aka Dex aka EgorKin')
     p.add_argument('-i',metavar='filename', nargs=1, help='input file')
-    p.add_argument('-x',metavar=('partID', 'offset'), type=int, nargs=2, help='extract partition by ID with start offset')
+    p.add_argument('-x',metavar=('partID', 'offset'), nargs='+', help='extract partition by ID with optional start offset. Or all partitions if partID = ALL')
     p.add_argument('-r',metavar=('partID', 'offset', 'filename'), nargs=3, help='replace partition by ID with start offset using iput file')
-    p.add_argument('-u',metavar=('partID'), type=int, nargs=1, help='uncompress partition by ID')
+    p.add_argument('-u',metavar=('partID', 'offset'), type=int, nargs='+', help='uncompress partition by ID with optional start offset')
     p.add_argument('-fixCRC', action='store_true', help='fix CRC value for all possible partitions')
     #p.add_argument('-o',metavar='output',nargs=1,help='output file')
     #print("len=%i" %(len(sys.argv)))
@@ -172,11 +173,24 @@ def get_args():
     in_file=args.i[0]
 
     if args.x:
-        is_extract = args.x[0]
-        is_extract_offset = args.x[1]
+        #если offset = ALL - извлекаем все партиции
+        if (args.x[0] == 'all') | (args.x[0] == 'ALL'):
+            is_extract_all = 1
+            is_extract_offset = 0
+            is_extract = 0xFF
+        else:
+            is_extract_all = 0
+            is_extract = int(args.x[0])
+            # если задан 2ой аргумент - offset
+            if len(args.x) == 2:
+                is_extract_offset = int(args.x[1])
+            else:
+                # если offset не задан - значит = 0
+                is_extract_offset = 0
     else:
         is_extract = -1
         is_extract_offset = -1
+        is_extract_all = 0
 
     if args.r:
         is_replace = int(args.r[0])
@@ -189,8 +203,15 @@ def get_args():
 
     if args.u:
         is_uncompress = args.u[0]
+        # если задан 2ой аргумент - offset
+        if len(args.u) == 2:
+            is_uncompress_offset = int(args.u[1])
+        else:
+            # если offset не задан - значит = 0
+            is_uncompress_offset = 0
     else:
         is_uncompress = -1
+        is_uncompress_offset = -1
 
     if args.fixCRC:
         fixCRC_partID = 1
@@ -198,7 +219,7 @@ def get_args():
         fixCRC_partID = -1
 
 
-    return (in_file, is_extract, is_extract_offset, is_replace, is_replace_offset, is_replace_file, is_uncompress, fixCRC_partID)
+    return (in_file, is_extract, is_extract_offset, is_extract_all, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, fixCRC_partID)
 
 
 
@@ -670,7 +691,7 @@ def main():
     global in_file
     #global in_offset
     global out_file
-    in_file, is_extract, is_extract_offset, is_replace, is_replace_offset, is_replace_file, is_uncompress, fixCRC_partID = get_args()
+    in_file, is_extract, is_extract_offset, is_extract_all, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, fixCRC_partID = get_args()
     partitions_count = 0
 
     fin = open(in_file, 'rb')
@@ -782,20 +803,36 @@ def main():
     # extract partition by ID to outputfile
     if is_extract != -1:
         part_nr = -1
-        for a in range(partitions_count):
-            if part_id[a] == is_extract:
-                part_nr = a
-                break
-        if part_nr != -1:
-            print('Extract partition ID %i from 0x%08X + 0x%08X to file \033[93m%s\033[0m' % (is_extract, part_startoffset[part_nr], is_extract_offset, in_file + '-partitionID' + str(is_extract)))
-            fin.seek(part_startoffset[part_nr] + is_extract_offset, 0)
-            finread = fin.read(part_size[part_nr] - is_extract_offset)
-            
-            fpartout = open(in_file + '-partitionID' + str(is_extract), 'w+b')
-            fpartout.write(finread)
-            fpartout.close()
+        if is_extract_all != 1:
+            for a in range(partitions_count):
+                if part_id[a] == is_extract:
+                    part_nr = a
+                    break
+            if part_nr != -1:
+                print('Extract partition ID %i from 0x%08X + 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], is_extract_offset, in_file + '-partitionID' + str(part_id[part_nr])))
+                fin.seek(part_startoffset[part_nr] + is_extract_offset, 0)
+                finread = fin.read(part_size[part_nr] - is_extract_offset)
+                
+                fpartout = open(in_file + '-partitionID' + str(part_id[part_nr]), 'w+b')
+                fpartout.write(finread)
+                fpartout.close()
+            else:
+                print('\033[91mCould not find partiton with ID %i\033[0m' % is_extract)
         else:
-            print('\033[91mCould not find partiton with ID %i\033[0m' % is_extract)
+            # extract all partitions
+            for a in range(partitions_count):
+                part_nr = a
+                if part_nr != -1:
+                    print('Extract partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], in_file + '-partitionID' + str(part_id[part_nr])))
+                    fin.seek(part_startoffset[part_nr], 0)
+                    finread = fin.read(part_size[part_nr])
+                    
+                    fpartout = open(in_file + '-partitionID' + str(part_id[part_nr]), 'w+b')
+                    fpartout.write(finread)
+                    fpartout.close()
+                else:
+                    print('\033[91mCould not find partiton with ID %i\033[0m' % part_id[part_nr])
+                    
         fin.close()
         exit(0)
 
@@ -835,9 +872,12 @@ def main():
                 part_nr = a
                 break
         if part_nr != -1:
-            print('Uncompress partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (is_uncompress, part_startoffset[part_nr], in_file + '-uncomp_partitionID' + str(is_uncompress)))
-            out_file = in_file + '-uncomp_partitionID' + str(is_uncompress)
-            lz_uncompress(part_startoffset[part_nr])
+            if is_uncompress_offset != 0:
+                print('Uncompress partition ID %i from 0x%08X + 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], is_uncompress_offset, in_file + '-uncomp_partitionID' + str(part_id[part_nr])))
+            else:
+                print('Uncompress partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], in_file + '-uncomp_partitionID' + str(part_id[part_nr])))
+            out_file = in_file + '-uncomp_partitionID' + str(part_id[part_nr])
+            lz_uncompress(part_startoffset[part_nr] + is_uncompress_offset)
             
         else:
             print('\033[91mCould not find partiton with ID %i\033[0m' % is_uncompress)
