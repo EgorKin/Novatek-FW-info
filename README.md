@@ -1,5 +1,7 @@
 # Novatek-FW-info
 Python script for work with Novatek binary firmwares - get info, modify...
+![Безымянный](https://user-images.githubusercontent.com/4955678/184808463-1b5d62b6-eb76-41d9-a75a-dbd019e8f60f.png)
+![Безымянный2](https://user-images.githubusercontent.com/4955678/184808917-48616d07-9d85-4656-9c44-ca424bc82cca.png)
 
 Require install few python modules:
 sudo apt-get install mtd-utils
