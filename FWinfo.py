@@ -8,6 +8,7 @@
 # V3.3 - add optional start offset for -u command (uncompress partition); add -x ALL option, also start offset for -x and -u now optional (do not need set it to 0)
 # V3.4 - add ZLIB uncompress support
 # V3.5 - add LZMA uncompress support
+# V3.6 - for -u command: if start offset not defined of 0 - auto skip CKSM header size (0x40 bytes) for CKSM partition
 
 
 import os, struct, sys, argparse, array
@@ -212,7 +213,7 @@ def get_args():
         if len(args.u) == 2:
             is_uncompress_offset = int(args.u[1])
         else:
-            # если offset не задан - значит = 0
+            # если offset не задан - то он 0
             is_uncompress_offset = 0
     else:
         is_uncompress = -1
@@ -277,7 +278,7 @@ def BCL1_uncompress(in_offset):
         print("\033[91mBCL1 marker not found, exit\033[0m")
         sys.exit(1)
     
-    # check compression algo - must be LZ (0x0009)
+    # check compression algo
     fin.read(2)
     Algorithm = struct.unpack('>H', fin.read(2))[0]
     if (Algorithm != 0x09) & (Algorithm != 0x0B) & (Algorithm != 0x0C):
@@ -927,6 +928,16 @@ def main():
             else:
                 print('Uncompress partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], in_file + '-uncomp_partitionID' + str(part_id[part_nr])))
             out_file = in_file + '-uncomp_partitionID' + str(part_id[part_nr])
+            
+            # if offset not defined - auto skip CKSM header size (0x40 bytes)
+            if is_uncompress_offset == 0:
+                fin.seek(part_startoffset[part_nr], 0)
+                FourCC = fin.read(4)
+                # skip CKSM header
+                if FourCC == b'CKSM':
+                    is_uncompress_offset = 0x40 # CKSM header size
+                    print('Auto skip CKSM header: 64 bytes')
+
             BCL1_uncompress(part_startoffset[part_nr] + is_uncompress_offset)
             
         else:
