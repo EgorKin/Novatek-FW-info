@@ -10,6 +10,8 @@
 # V3.5 - add LZMA uncompress support
 # V3.6 - for -u command: if start offset not defined of 0 - auto skip CKSM header size (0x40 bytes) for CKSM partition
 # V3.7 - parse UBI volume names
+# V3.8 - for -u command: if start offset not defined - auto skip CKSM header size (0x40 bytes) for CKSM partition; if offset set to 0 - force use 0 (does not use auto skip)
+# V3.9 - extract files from UBI via -u command using ubireader
 
 
 import os, struct, sys, argparse, array
@@ -214,8 +216,8 @@ def get_args():
         if len(args.u) == 2:
             is_uncompress_offset = int(args.u[1])
         else:
-            # если offset не задан - то он 0
-            is_uncompress_offset = 0
+            # если offset не задан - то будет -1 для того чтобы дальше присвоить либо 0x40 (для CKSM) либо 0 (в остальных случаях)
+            is_uncompress_offset = -1
     else:
         is_uncompress = -1
         is_uncompress_offset = -1
@@ -261,14 +263,49 @@ def MemCheck_CalcCheckSum16Bit(in_offset, uiLen, ignoreCRCoffset):
 
     return uiSum
 
-  
+
+def uncompress(in_offset, out_filename, size):
+    global in_file
+
+    fin = open(in_file, 'rb')
+    # check BCL1 marker at start of partition    
+    fin.seek(in_offset, 0)
+    FourCC = fin.read(4)
     
-   
+
+    if FourCC == b'BCL1':
+        fin.close()
+        BCL1_uncompress(in_offset)
+        return
+
+    if FourCC == b'UBI#':
+        #create dir with unpack+partition name
+        os.system('rm -rf ' + out_filename)
+        os.system('mkdir ' + out_filename)
+
+        #extract UBI partition to tempfile
+        fin.seek(in_offset, 0)
+        finread = fin.read(size)
+        fin.close()
+        fpartout = open('./' + out_filename + '/' + 'tempfile', 'w+b')
+        fpartout.write(finread)
+        fpartout.close()
+
+        #unpack UBIFS
+        os.system('ubireader_extract_files -k -i -f ' + '-o ' + out_filename + ' ./' + out_filename + '/' + 'tempfile')
+
+        # delete tempfile
+        os.system('rm -rf ' + './' + out_filename + '/' + 'tempfile')
+        return
+
+    print("\033[91mBCL1 or UBI# markers not found, exit\033[0m")
+    fin.close()
+
 
 def BCL1_uncompress(in_offset):
     global in_file
     global out_file
-    
+
 
     fin = open(in_file, 'rb')
 
@@ -278,7 +315,7 @@ def BCL1_uncompress(in_offset):
     if FourCC != b'BCL1':
         print("\033[91mBCL1 marker not found, exit\033[0m")
         sys.exit(1)
-    
+
     # check compression algo
     fin.read(2)
     Algorithm = struct.unpack('>H', fin.read(2))[0]
@@ -288,7 +325,7 @@ def BCL1_uncompress(in_offset):
 
 
     fout = open(out_file, 'w+b')
-    
+
     outsize = struct.unpack('>I', fin.read(4))[0]
     insize = struct.unpack('>I', fin.read(4))[0]
 
@@ -931,22 +968,25 @@ def main():
                 part_nr = a
                 break
         if part_nr != -1:
-            if is_uncompress_offset != 0:
+            if is_uncompress_offset != -1:
                 print('Uncompress partition ID %i from 0x%08X + 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], is_uncompress_offset, in_file + '-uncomp_partitionID' + str(part_id[part_nr])))
             else:
                 print('Uncompress partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], in_file + '-uncomp_partitionID' + str(part_id[part_nr])))
             out_file = in_file + '-uncomp_partitionID' + str(part_id[part_nr])
             
             # if offset not defined - auto skip CKSM header size (0x40 bytes)
-            if is_uncompress_offset == 0:
+            if is_uncompress_offset == -1:
                 fin.seek(part_startoffset[part_nr], 0)
                 FourCC = fin.read(4)
                 # skip CKSM header
                 if FourCC == b'CKSM':
                     is_uncompress_offset = 0x40 # CKSM header size
                     print('Auto skip CKSM header: 64 bytes')
+                else:
+                    is_uncompress_offset = 0 # if start offset not defined set it to 0
 
-            BCL1_uncompress(part_startoffset[part_nr] + is_uncompress_offset)
+            #BCL1_uncompress(part_startoffset[part_nr] + is_uncompress_offset)
+            uncompress(part_startoffset[part_nr] + is_uncompress_offset, out_file, part_size[part_nr] - is_uncompress_offset)
             
         else:
             print('\033[91mCould not find partiton with ID %i\033[0m' % is_uncompress)
