@@ -9,6 +9,7 @@
 # V3.4 - add ZLIB uncompress support
 # V3.5 - add LZMA uncompress support
 # V3.6 - for -u command: if start offset not defined of 0 - auto skip CKSM header size (0x40 bytes) for CKSM partition
+# V3.7 - parse UBI volume names
 
 
 import os, struct, sys, argparse, array
@@ -383,10 +384,6 @@ def BCL1_uncompress(in_offset):
         fin.close()
         
         decompress = decompress_lzma(dataread)[:outsize]
-        #tf = lzma.open('testfilename', 'rb', format = lzma.FORMAT_ALONE)
-        #decompress = tf.read(outsize)
-        #tf.close()
-        
         fout.write(decompress)
         fout.close()
 
@@ -400,7 +397,7 @@ def BCL1_uncompress(in_offset):
         fout.close()
 
 
-# use for lzma exception workaroud
+# use for lzma exception workaround
 # see at https://stackoverflow.com/questions/37400583/python-lzma-compressed-data-ended-before-the-end-of-stream-marker-was-reached
 def decompress_lzma(data):
     results = []
@@ -429,7 +426,7 @@ def fillIDPartNames(startat):
     fin = open(in_file, 'r+b')
     fin.seek(startat+0x34, 0)
 
-    #-----начали 1 секцию----
+    #-----начали секцию----
     starting = struct.unpack('>I', fin.read(4))[0] #00000001
     while(starting == 0x00000001):
         #вычисляем длину id
@@ -469,7 +466,7 @@ def fillIDPartNames(startat):
             fin.read(4) #если имени нет то дочитываются все 4 байта
         
         fin.read(4) #00000002
-        #-----закончили 1 секцию----
+        #-----закончили секцию----
         
         starting = struct.unpack('>I', fin.read(4))[0] #00000001
     
@@ -681,11 +678,22 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         temp_parttype = '\033[93mUBI\033[0m'
 
         # get UBI volume name
-        #ubireader_display_info <<<$(tail -c+3621181 FWA229A.bin | head -c67502080)
-        #os.system('tail -c+3621181 FWA229A.bin | head -c67502080 > temp6')
-        #proc = subprocess.Popen(['ubireader_display_info temp6|grep Volume:'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
-        #os.system('rm ./temp6')
-        #temp_parttype += ' \033[93m' + proc.communicate()[0] + '\033[0m'
+        # чтобы не вызывать лишних команд и не делать временные файлы (т.к. ubireader не умеет работать с данными напрямую а лишь с файлами)
+        # делаем проще - от UBI# + 0x1010 и там лежит имя Volume
+        fin.seek(0x100C, 1)
+        # считываем имя, идя до \00
+        #вычисляем длину имени
+        id_lenght = 0
+        t = struct.unpack('b', fin.read(1))[0]
+        while(t != 0x00):
+            id_lenght += 1
+            t = struct.unpack('b', fin.read(1))[0]
+        #print(id_lenght)
+        fin.seek(-1*(id_lenght+1), 1) # вернемся на начало имени id
+        # считаем имя
+        UBIname = str(struct.unpack('%ds' % (id_lenght), fin.read(id_lenght))[0])[2:-1] #отрезает b` `
+        # добавим считанное
+        temp_parttype += ' \"\033[93m' + UBIname + '\033[0m\"'
             
         if addinfo:
             part_type.append(temp_parttype)
