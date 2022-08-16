@@ -156,8 +156,8 @@ compressAlgoTypes = {
     0x08 : 'RICE32S',
     0x09 : 'LZ',
     0x0A : 'SF',
-    0x0B : 'LZMA',  #вроде бы так
-    0x0C : 'ZLIB'  #вроде бы так
+    0x0B : 'LZMA',
+    0x0C : 'ZLIB'
 }
 
 
@@ -194,8 +194,8 @@ def get_args():
             if len(args.x) == 2:
                 is_extract_offset = int(args.x[1])
             else:
-                # если offset не задан - значит = 0
-                is_extract_offset = 0
+                # если offset не задан - далее исправим на 0
+                is_extract_offset = -1
     else:
         is_extract = -1
         is_extract_offset = -1
@@ -279,7 +279,7 @@ def uncompress(in_offset, out_filename, size):
         return
 
     if FourCC == b'UBI#':
-        #create dir with unpack+partition name
+        #create dir with similar name as for other parttition types
         os.system('rm -rf ' + out_filename)
         os.system('mkdir ' + out_filename)
 
@@ -291,7 +291,7 @@ def uncompress(in_offset, out_filename, size):
         fpartout.write(finread)
         fpartout.close()
 
-        #unpack UBIFS
+        #unpack UBIFS to created dir
         os.system('ubireader_extract_files -k -i -f ' + '-o ' + out_filename + ' ./' + out_filename + '/' + 'tempfile')
 
         # delete tempfile
@@ -905,25 +905,33 @@ def main():
                     part_nr = a
                     break
             if part_nr != -1:
-                print('Extract partition ID %i from 0x%08X + 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], is_extract_offset, in_file + '-partitionID' + str(part_id[part_nr])))
+                out_file = in_file + '-partitionID' + str(part_id[part_nr])
+                
+                if is_extract_offset != -1:
+                    print('Extract partition ID %i from 0x%08X + 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], is_extract_offset, out_file))
+                else:
+                    print('Extract partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], out_file))
+                    is_extract_offset = 0
+
                 fin.seek(part_startoffset[part_nr] + is_extract_offset, 0)
                 finread = fin.read(part_size[part_nr] - is_extract_offset)
                 
-                fpartout = open(in_file + '-partitionID' + str(part_id[part_nr]), 'w+b')
+                fpartout = open(out_file, 'w+b')
                 fpartout.write(finread)
                 fpartout.close()
             else:
                 print('\033[91mCould not find partiton with ID %i\033[0m' % is_extract)
         else:
             # extract all partitions
-            for a in range(partitions_count):
-                part_nr = a
+            for part_nr in range(partitions_count):
                 if part_nr != -1:
-                    print('Extract partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], in_file + '-partitionID' + str(part_id[part_nr])))
+                    out_file = in_file + '-partitionID' + str(part_id[part_nr])
+                    
+                    print('Extract partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], out_file))
                     fin.seek(part_startoffset[part_nr], 0)
                     finread = fin.read(part_size[part_nr])
                     
-                    fpartout = open(in_file + '-partitionID' + str(part_id[part_nr]), 'w+b')
+                    fpartout = open(out_file, 'w+b')
                     fpartout.write(finread)
                     fpartout.close()
                 else:
@@ -968,12 +976,13 @@ def main():
                 part_nr = a
                 break
         if part_nr != -1:
-            if is_uncompress_offset != -1:
-                print('Uncompress partition ID %i from 0x%08X + 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], is_uncompress_offset, in_file + '-uncomp_partitionID' + str(part_id[part_nr])))
-            else:
-                print('Uncompress partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], in_file + '-uncomp_partitionID' + str(part_id[part_nr])))
             out_file = in_file + '-uncomp_partitionID' + str(part_id[part_nr])
             
+            if is_uncompress_offset != -1:
+                print('Uncompress partition ID %i from 0x%08X + 0x%08X to \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], is_uncompress_offset, out_file))
+            else:
+                print('Uncompress partition ID %i from 0x%08X to \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], out_file))
+
             # if offset not defined - auto skip CKSM header size (0x40 bytes)
             if is_uncompress_offset == -1:
                 fin.seek(part_startoffset[part_nr], 0)
@@ -985,7 +994,6 @@ def main():
                 else:
                     is_uncompress_offset = 0 # if start offset not defined set it to 0
 
-            #BCL1_uncompress(part_startoffset[part_nr] + is_uncompress_offset)
             uncompress(part_startoffset[part_nr] + is_uncompress_offset, out_file, part_size[part_nr] - is_uncompress_offset)
             
         else:
