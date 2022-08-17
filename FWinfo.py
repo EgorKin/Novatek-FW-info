@@ -342,76 +342,71 @@ def BCL1_uncompress(in_offset):
         # Main decompression loop
         outpos = 0;
         while((inpos < insize) & (outpos < outsize)):
-            fin.seek(in_offset + inpos, 0)
             symbol = struct.unpack('B', fin.read(1))[0]
-            inpos = inpos + 1
+            inpos += 1
     
             if symbol == marker:
                 # We had a marker byte
-                fin.seek(in_offset + inpos, 0)
-    
-                if struct.unpack('B', fin.read(1))[0] == 0:
+                readbyte = struct.unpack('B', fin.read(1))[0]
+                if readbyte == 0:
                     # It was a single occurrence of the marker byte
                     fout.write(struct.pack('B', marker))
-                    outpos = outpos + 1
-                    inpos = inpos + 1
+                    outpos += 1
+                    inpos += 1
                 else:
                     # Extract true length and offset
+                    #print("curr file offset = 0x%0x" % (in_offset + inpos))
                     #inpos += lz_read_var_size( &length, &in[ inpos ] );
                     #=================================================
-                    #print("curr file offset = 0x%0x" % (in_offset + inpos))
                     y = 0
                     num_bytes = 0
                     
-                    fin.seek(in_offset + inpos, 0)
-                    b = struct.unpack('B', fin.read(1))[0]
+                    b = readbyte
                     y = (y << 7) | (b & 0x0000007f)
-                    num_bytes = num_bytes + 1
+                    num_bytes += 1
                     
                     while (b & 0x00000080) != 0:
                         b = struct.unpack('B', fin.read(1))[0]
                         y = (y << 7) | (b & 0x0000007f)
-                        num_bytes = num_bytes + 1
+                        num_bytes += 1
     
                     length = y;
-                    inpos = inpos + num_bytes;
-                    #=================================================
+                    inpos += num_bytes;
                     #print("length = 0x%0x" % (length))
+                    #=================================================
                     
                     #inpos += lz_read_var_size( &offset, &in[ inpos ] );
                     #=================================================
                     y = 0
                     num_bytes = 0
                     
-                    fin.seek(in_offset + inpos, 0)
                     b = struct.unpack('B', fin.read(1))[0]
                     y = (y << 7) | (b & 0x0000007f)
-                    num_bytes = num_bytes + 1
+                    num_bytes += 1
                     
                     while (b & 0x00000080) != 0:
                         b = struct.unpack('B', fin.read(1))[0]
                         y = (y << 7) | (b & 0x0000007f)
-                        num_bytes = num_bytes + 1
+                        num_bytes += 1
     
                     offset = y;
-                    inpos = inpos + num_bytes;
-                    #=================================================
+                    inpos += num_bytes;
                     #print("offset = 0x%0x" % (offset))
+                    #=================================================
     
                     # Copy corresponding data from history window
+                    #out[ outpos ] = out[ outpos - offset ];
                     for i in range(length):
-                        #out[ outpos ] = out[ outpos - offset ];
                         fout.seek(outpos - offset, 0)
                         out = struct.unpack('B', fout.read(1))[0]
-                        
                         fout.seek(outpos, 0)
                         fout.write(struct.pack('B', out))
-                        
-                        outpos = outpos + 1
+                        outpos += 1
             else:
                 # No marker, plain copy
                 fout.write(struct.pack('B', symbol))
-                outpos = outpos + 1
+                outpos += 1
+
         fin.close()
         fout.close()
     
@@ -467,38 +462,38 @@ def fillIDPartNames(startat):
     starting = struct.unpack('>I', fin.read(4))[0] #00000001
     while(starting == 0x00000001):
         #вычисляем длину id
-        id_lenght = 0
+        id_length = 0
         t = struct.unpack('b', fin.read(1))[0]
         while(t != 0x00):
-            id_lenght+=1
+            id_length+=1
             t = struct.unpack('b', fin.read(1))[0]
-        #print(id_lenght)
-        fin.seek(-1*(id_lenght+1), 1) # вернемся на начало имени id
+        #print(id_length)
+        fin.seek(-1*(id_length+1), 1) # вернемся на начало имени id
         # считаем idx
-        idname = str(struct.unpack('%ds' % (id_lenght), fin.read(id_lenght))[0])[2:-1] #отрезает b` `
+        idname = str(struct.unpack('%ds' % (id_length), fin.read(id_length))[0])[2:-1] #отрезает b` `
         #print(idname)
         dtbpart_ID.append(idname)
-        fin.read(4 - (id_lenght%4)) #дочитываем все 00 которые нужны для выравнивания по 4 байта
+        fin.read(4 - (id_length%4)) #дочитываем все 00 которые нужны для выравнивания по 4 байта
         
         fin.read(4) #00000003
-        lenghtname = struct.unpack('>I', fin.read(4))[0]
+        lengthname = struct.unpack('>I', fin.read(4))[0]
         fin.read(4) #00000223
-        shortname = str(struct.unpack('%ds' % (lenghtname-1), fin.read(lenghtname-1))[0])[2:-1] #отрезает b` `
+        shortname = str(struct.unpack('%ds' % (lengthname-1), fin.read(lengthname-1))[0])[2:-1] #отрезает b` `
         #print(shortname)
         dtbpart_name.append(shortname)
-        if lenghtname > 1:
-            fin.read(4 - ((lenghtname-1)%4)) #дочитываем все 00 которые нужны для выравнивания по 4 байта
+        if lengthname > 1:
+            fin.read(4 - ((lengthname-1)%4)) #дочитываем все 00 которые нужны для выравнивания по 4 байта
         else:
             fin.read(4) #если имени нет то дочитываются все 4 байта
         
         fin.read(4) #00000003
-        lenghtfilename = struct.unpack('>I', fin.read(4))[0]
+        lengthfilename = struct.unpack('>I', fin.read(4))[0]
         fin.read(4) #00000232
-        filename = str(struct.unpack('%ds' % (lenghtfilename-1), fin.read(lenghtfilename-1))[0])[2:-1] #отрезает b` `
+        filename = str(struct.unpack('%ds' % (lengthfilename-1), fin.read(lengthfilename-1))[0])[2:-1] #отрезает b` `
         #print(filename)
         dtbpart_filename.append(filename)
-        if lenghtfilename > 1:
-            fin.read(4 - ((lenghtfilename-1)%4)) #дочитываем все 00 которые нужны для выравнивания по 4 байта
+        if lengthfilename > 1:
+            fin.read(4 - ((lengthfilename-1)%4)) #дочитываем все 00 которые нужны для выравнивания по 4 байта
         else:
             fin.read(4) #если имени нет то дочитываются все 4 байта
         
@@ -674,14 +669,14 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
             temp_parttype += ', Chip:\033[93m' + str(struct.unpack('8s', fin.read(8))[0]).replace("\\x00","")[2:-1] + '\033[0m'
             fin.read(8)
             temp_parttype += ', Build:\033[93m' + str(struct.unpack('8s', fin.read(8))[0]).replace("\\x00","")[2:-1] + '\033[0m'
-            uiLenght = struct.unpack('<I', fin.read(4))[0]
+            uilength = struct.unpack('<I', fin.read(4))[0]
             fin.seek(2, 1)
             uiChkValue = struct.unpack('<H', fin.read(2))[0]
             
             if addinfo:
                 part_type.append(temp_parttype)
                 part_crc.append(uiChkValue)
-                part_crcCalc.append(MemCheck_CalcCheckSum16Bit(start_offset, uiLenght, 0x36))
+                part_crcCalc.append(MemCheck_CalcCheckSum16Bit(start_offset, uilength, 0x36))
                 fin.close()
             return temp_parttype
 
@@ -720,15 +715,15 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         fin.seek(0x100C, 1)
         # считываем имя, идя до \00
         #вычисляем длину имени
-        id_lenght = 0
+        id_length = 0
         t = struct.unpack('b', fin.read(1))[0]
         while(t != 0x00):
-            id_lenght += 1
+            id_length += 1
             t = struct.unpack('b', fin.read(1))[0]
-        #print(id_lenght)
-        fin.seek(-1*(id_lenght+1), 1) # вернемся на начало имени id
+        #print(id_length)
+        fin.seek(-1*(id_length+1), 1) # вернемся на начало имени id
         # считаем имя
-        UBIname = str(struct.unpack('%ds' % (id_lenght), fin.read(id_lenght))[0])[2:-1] #отрезает b` `
+        UBIname = str(struct.unpack('%ds' % (id_length), fin.read(id_length))[0])[2:-1] #отрезает b` `
         # добавим считанное
         temp_parttype += ' \"\033[93m' + UBIname + '\033[0m\"'
             
