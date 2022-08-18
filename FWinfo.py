@@ -12,13 +12,14 @@
 # V3.7 - parse UBI volume names
 # V3.8 - for -u command: if start offset not defined - auto skip CKSM header size (0x40 bytes) for CKSM partition; if offset set to 0 - force use 0 (does not use auto skip)
 # V3.9 - extract files from UBI via -u command using ubireader
+# V4.0 - add -c command: compress partition by ID and merge to firmware file (only CKSM<--UBI support now, WIP)
 
 
 import os, struct, sys, argparse, array
 from datetime import datetime
 import zlib
 import lzma
-#import subprocess
+import subprocess
 
 
 in_file = ''
@@ -165,13 +166,17 @@ def get_args():
     global in_file
     global is_extract
     global is_uncompress
+    global is_compress
+    global is_silent
 
     p = argparse.ArgumentParser(add_help=True, description='This script working with ARM-based Novatek firmware binary file. Creator: Dex9999(4pda.to user) aka Dex aka EgorKin')
     p.add_argument('-i',metavar='filename', nargs=1, help='input file')
     p.add_argument('-x',metavar=('partID', 'offset'), nargs='+', help='extract partition by ID with optional start offset. Or all partitions if partID = ALL')
     p.add_argument('-r',metavar=('partID', 'offset', 'filename'), nargs=3, help='replace partition by ID with start offset using iput file')
     p.add_argument('-u',metavar=('partID', 'offset'), type=int, nargs='+', help='uncompress partition by ID with optional start offset')
+    p.add_argument('-c',metavar=('partID', 'offset'), type=int, nargs='+', help='compress partition by ID and merge to firmware file with optional start offset')
     p.add_argument('-fixCRC', action='store_true', help='fix CRC value for all possible partitions')
+    p.add_argument('-silent', action='store_true', help='do not print messages')
     #p.add_argument('-o',metavar='output',nargs=1,help='output file')
     #print("len=%i" %(len(sys.argv)))
     if len(sys.argv) < 3:
@@ -222,13 +227,30 @@ def get_args():
         is_uncompress = -1
         is_uncompress_offset = -1
 
+    if args.c:
+        is_compress = args.c[0]
+        # если задан 2ой аргумент - offset
+        if len(args.c) == 2:
+            is_compress_offset = int(args.c[1])
+        else:
+            # если offset не задан - то будет -1 для того чтобы дальше присвоить либо 0x40 (для CKSM) либо 0 (в остальных случаях)
+            is_compress_offset = -1
+    else:
+        is_compress = -1
+        is_compress_offset = -1
+
     if args.fixCRC:
         fixCRC_partID = 1
     else:
         fixCRC_partID = -1
 
+    if args.silent:
+        is_silent = 1
+    else:
+        is_silent = -1
 
-    return (in_file, is_extract, is_extract_offset, is_extract_all, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, fixCRC_partID)
+
+    return (in_file, is_extract, is_extract_offset, is_extract_all, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, is_compress, is_compress_offset, fixCRC_partID)
 
 
 
@@ -264,6 +286,71 @@ def MemCheck_CalcCheckSum16Bit(in_offset, uiLen, ignoreCRCoffset):
     return uiSum
 
 
+
+def compress(part_nr, offset, in2_file):
+    global in_file
+
+    fin = open(in_file, 'rb')
+    fin.seek(part_startoffset[part_nr], 0)
+    FourCC = fin.read(4)
+
+    if FourCC != b'CKSM':
+        print('\033[91mNot CKSM partition, exit\033[0m')
+        exit(0)
+
+    # skip CKSM
+    fin.seek(part_startoffset[part_nr] + 0x40, 0)
+
+    FourCC = fin.read(4)
+    if FourCC != b'UBI#':
+        print('\033[91mNot UBI# into CKSM partition, exit\033[0m')
+        exit(0)
+
+    # для UBI на вход должна подаваться папка партиции, а не файл
+    if not os.path.exists(in2_file):
+        print('\033[91m%s folder does not found, exit\033[0m' % in2_file)
+        exit(0)
+
+    # extract UBI partition to tempfile
+    fin.seek(part_startoffset[part_nr] + 0x40, 0)
+    finread = fin.read(part_size[part_nr] - 0x40)
+    fin.close()
+    fpartout = open('./' + in2_file + '/' + 'tempfile', 'w+b')
+    fpartout.write(finread)
+    fpartout.close()
+
+    # delete temp dir for info - ubireader require clear folder
+    subprocess.run('rm -rf ' + in2_file + '/tempdir', shell=True)
+
+    # get info about UBI to compressing script
+    subprocess.check_output('ubireader_utils_info ' + '-o ' + in2_file + '/tempdir ./' + in2_file + '/' + 'tempfile', shell=True)
+
+    # delete tempfile
+    subprocess.run('rm ' + in2_file + '/tempfile', shell=True)
+
+    # получим имя папки в которую была распакована партиция (пока я видел чисто цифровые имена, тоже что и image_seq -Q в выводе ubireader_utils_info)
+    d = os.popen('(cd ' + in2_file + '&& find -maxdepth 1 -wholename "./*" -not -wholename "./temp*" -type d)').read()
+
+    # fix ini-file: delete line "vol_flags=0" it cause error "unknown flags"
+    subprocess.run('(cd ' + in2_file + '/tempdir/tempfile/img-* && sed -i "/vol_flags = 0/d" *.ini)', shell=True)
+
+    # run compilation dir to ubi script    
+    subprocess.run('(cd ' + in2_file + '/tempdir/tempfile/img-* && ./create_ubi_img-*.sh ../../../' + d[2:-1] + '/*)', shell=True) # d[2:-1] уберем ./ в начале и новую строку в конце
+
+    # replace partition
+    if offset == -1:
+        subprocess.run('python3 FWinfo.py -i ' + in_file + ' -silent -r ' + str(part_id[part_nr]) + ' 64 ' + in2_file + '/tempdir/tempfile/img-*/img-*.ubi', shell=True)
+    else:
+        subprocess.run('python3 FWinfo.py -i ' + in_file + ' -silent -r ' + str(part_id[part_nr]) + ' ' + str(offset) + ' ' + in2_file + '/tempdir/tempfile/img-*/img-*.ubi', shell=True)
+
+    # delete temp dir for info
+    subprocess.run('rm -rf ' + in2_file + '/tempdir', shell=True)
+    
+    # fix CRC
+    subprocess.run('python3 FWinfo.py -i ' + in_file + ' -silent -fixCRC', shell=True)
+
+
+
 def uncompress(in_offset, out_filename, size):
     global in_file
 
@@ -271,7 +358,7 @@ def uncompress(in_offset, out_filename, size):
     # check BCL1 marker at start of partition    
     fin.seek(in_offset, 0)
     FourCC = fin.read(4)
-    
+
 
     if FourCC == b'BCL1':
         fin.close()
@@ -782,7 +869,7 @@ def main():
     global in_file
     #global in_offset
     global out_file
-    in_file, is_extract, is_extract_offset, is_extract_all, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, fixCRC_partID = get_args()
+    in_file, is_extract, is_extract_offset, is_extract_all, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, is_compress, is_compress_offset, fixCRC_partID = get_args()
     partitions_count = 0
 
     fin = open(in_file, 'rb')
@@ -801,7 +888,8 @@ def main():
                             FW_HDR2 = 1
     
     if FW_HDR2 == 1:
-        print("\033[93mNVTPACK_FW_HDR2\033[0m found")
+        if is_silent != 1:
+            print("\033[93mNVTPACK_FW_HDR2\033[0m found")
     else:
         print("\033[91mNVTPACK_FW_HDR2\033[0m not found")
         fin.seek(0, 0)
@@ -829,7 +917,8 @@ def main():
                 print("\033[91mNVTPACK_FW_HDR\033[0m not found")
                 partitions_count = 1 # раз нет NVTPACK_FW_HDR значит у нас только 1 партиция - BCL1
             else:
-                print("\033[93mNVTPACK_FW_HDR\033[0m found")
+                if is_silent != 1:
+                    print("\033[93mNVTPACK_FW_HDR\033[0m found")
                 NVTPACK_FW_HDR_AND_PARTITIONS_size = struct.unpack('<I', fin.read(4))[0]
                 checksum = struct.unpack('<I', fin.read(4))[0]
                 partitions_count = struct.unpack('<I', fin.read(4))[0] + 1  # + 1 так как есть еще нулевая BCL1 партиция
@@ -854,7 +943,8 @@ def main():
     if FW_HDR2 == 1:
         # NVTPACK_FW_HDR2_VERSION check
         if struct.unpack('<I', fin.read(4))[0] == 0x16071515:
-            print("\033[93mNVTPACK_FW_HDR2_VERSION\033[0m found")
+            if is_silent != 1:
+                print("\033[93mNVTPACK_FW_HDR2_VERSION\033[0m found")
         else:
             print("\033[91mNVTPACK_FW_HDR2_VERSION\033[0m not found")
             exit(0)
@@ -864,12 +954,13 @@ def main():
         total_file_size = struct.unpack('<I', fin.read(4))[0]
         checksum_method = struct.unpack('<I', fin.read(4))[0]
         checksum_value = struct.unpack('<I', fin.read(4))[0]
-        print('Found \033[93m%i\033[0m partitions' % partitions_count)
-        print('Firmware file size \033[93m{:>11,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
+        if is_silent != 1:
+            print('Found \033[93m%i\033[0m partitions' % partitions_count)
+            print('Firmware file size \033[93m{:>11,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
     
     
-        # если есть команда извлечь или заменить или распаковать партицию то CRC не считаем чтобы не тормозить
-        if (is_extract == -1 & is_replace == -1 & is_uncompress == -1):
+        # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
+        if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
             CRC_FW = MemCheck_CalcCheckSum16Bit(0, total_file_size, 0x24)
             if checksum_value == CRC_FW:
                 print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
@@ -903,9 +994,11 @@ def main():
                 out_file = in_file + '-partitionID' + str(part_id[part_nr])
                 
                 if is_extract_offset != -1:
-                    print('Extract partition ID %i from 0x%08X + 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], is_extract_offset, out_file))
+                    if is_silent != 1:
+                        print('Extract partition ID %i from 0x%08X + 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], is_extract_offset, out_file))
                 else:
-                    print('Extract partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], out_file))
+                    if is_silent != 1:
+                        print('Extract partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], out_file))
                     is_extract_offset = 0
 
                 fin.seek(part_startoffset[part_nr] + is_extract_offset, 0)
@@ -922,7 +1015,8 @@ def main():
                 if part_nr != -1:
                     out_file = in_file + '-partitionID' + str(part_id[part_nr])
                     
-                    print('Extract partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], out_file))
+                    if is_silent != 1:
+                        print('Extract partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], out_file))
                     fin.seek(part_startoffset[part_nr], 0)
                     finread = fin.read(part_size[part_nr])
                     
@@ -944,7 +1038,8 @@ def main():
                 part_nr = a
                 break
         if part_nr != -1:
-            print('Replace partition ID %i from 0x%08X + 0x%08X using inputfile \033[93m%s\033[0m' % (is_replace, part_startoffset[part_nr], is_replace_offset, is_replace_file))
+            if is_silent != 1:
+                print('Replace partition ID %i from 0x%08X + 0x%08X using inputfile \033[93m%s\033[0m' % (is_replace, part_startoffset[part_nr], is_replace_offset, is_replace_file))
             fin.close()
             freplace = open(is_replace_file, 'rb')
             freplacedata = freplace.read()
@@ -963,7 +1058,7 @@ def main():
         exit(0)
 
 
-    # uncompress partition by ID (if compress algo is supported)
+    # uncompress partition by ID
     if is_uncompress != -1:
         part_nr = -1
         for a in range(partitions_count):
@@ -974,9 +1069,11 @@ def main():
             out_file = in_file + '-uncomp_partitionID' + str(part_id[part_nr])
             
             if is_uncompress_offset != -1:
-                print('Uncompress partition ID %i from 0x%08X + 0x%08X to \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], is_uncompress_offset, out_file))
+                if is_silent != 1:
+                    print('Uncompress partition ID %i from 0x%08X + 0x%08X to \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], is_uncompress_offset, out_file))
             else:
-                print('Uncompress partition ID %i from 0x%08X to \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], out_file))
+                if is_silent != 1:
+                    print('Uncompress partition ID %i from 0x%08X to \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], out_file))
 
             # if offset not defined - auto skip CKSM header size (0x40 bytes)
             if is_uncompress_offset == -1:
@@ -985,7 +1082,8 @@ def main():
                 # skip CKSM header
                 if FourCC == b'CKSM':
                     is_uncompress_offset = 0x40 # CKSM header size
-                    print('Auto skip CKSM header: 64 bytes')
+                    if is_silent != 1:
+                        print('Auto skip CKSM header: 64 bytes')
                 else:
                     is_uncompress_offset = 0 # if start offset not defined set it to 0
 
@@ -993,6 +1091,31 @@ def main():
             
         else:
             print('\033[91mCould not find partiton with ID %i\033[0m' % is_uncompress)
+        fin.close()
+        exit(0)
+
+
+    # compress partition by ID and merge to FW file
+    if is_compress != -1:
+        part_nr = -1
+        for a in range(partitions_count):
+            if part_id[a] == is_compress:
+                part_nr = a
+                break
+        if part_nr != -1:
+            in2_file = in_file + '-uncomp_partitionID' + str(part_id[part_nr])
+            
+            if is_compress_offset != -1:
+                if is_silent != 1:
+                    print('Compress \033[93m%s\033[0m to partition ID %i at 0x%08X + 0x%08X' % (in2_file, part_id[part_nr], part_startoffset[part_nr], is_compress_offset))
+            else:
+                if is_silent != 1:
+                    print('Compress \033[93m%s\033[0m to partition ID %i at 0x%08X' % (in2_file, part_id[part_nr], part_startoffset[part_nr]))
+
+            compress(part_nr, is_compress_offset, in2_file)
+            
+        else:
+            print('\033[91mCould not find partiton with ID %i\033[0m' % is_compress)
         fin.close()
         exit(0)
 
@@ -1080,6 +1203,12 @@ def main():
                     print("  %2i     0x%08X - 0x%08X     %9i       0x%04X     \033[91m0x%04X\033[0m       %s" % (part_id[a], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
             print(" ----------------------------------------------------------------------------------------------------------------------")
 
+        if fixCRC_partID != -1:
+            CRC_FW = MemCheck_CalcCheckSum16Bit(0, total_file_size, 0x24)
+            if checksum_value == CRC_FW:
+                print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+            else:
+                print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m' % (checksum_value, CRC_FW))
 
 
 
