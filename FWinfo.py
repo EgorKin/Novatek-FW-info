@@ -1073,9 +1073,6 @@ def main():
         for a in range(partitions_count):
             GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a])
 
-        fin.close()
-
-
         # looking into dtb partition for partition id - name - filename info
         SearchPartNamesInDTB(partitions_count)
         
@@ -1201,7 +1198,7 @@ def main():
         exit(0)
 
 
-
+    fin.close()
 
 
 
