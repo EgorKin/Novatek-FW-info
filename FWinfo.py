@@ -331,23 +331,36 @@ def compress(part_nr, offset, in2_file):
     # получим имя папки в которую была распакована партиция (пока я видел чисто цифровые имена, тоже что и image_seq -Q в выводе ubireader_utils_info)
     d = os.popen('(cd ' + in2_file + '&& find -maxdepth 1 -wholename "./*" -not -wholename "./temp*" -type d)').read()
 
+    # проверим что нашли
+    if not os.path.exists(in2_file + d[1:-1]):
+        print('\033[91mNo input valid folder in %s found, exit\033[0m' % in2_file)
+        exit(0)
+
+    # d[2:-1] уберем ./ в начале и новую строку в конце имени папки
+    d = d[2:-1]
+    
     # fix ini-file: delete line "vol_flags=0" it cause error "unknown flags"
-    subprocess.run('(cd ' + in2_file + '/tempdir/tempfile/img-* && sed -i "/vol_flags = 0/d" *.ini)', shell=True)
+    subprocess.run('(cd ' + in2_file + '/tempdir/tempfile/img-' + d + ' && sed -i "/vol_flags = 0/d" img-' + d + '.ini)', shell=True)
 
     # run compilation dir to ubi script    
-    subprocess.run('(cd ' + in2_file + '/tempdir/tempfile/img-* && ./create_ubi_img-*.sh ../../../' + d[2:-1] + '/*)', shell=True) # d[2:-1] уберем ./ в начале и новую строку в конце
+    subprocess.run('(cd ' + in2_file + '/tempdir/tempfile/img-' + d + ' && ./create_ubi_img-' + d + '.sh ../../../' + d + '/*)', shell=True)
 
+    # hide output print
+    global is_silent
+    is_silent = 1
+    
     # replace partition
     if offset == -1:
-        subprocess.run('python3 FWinfo.py -i ' + in_file + ' -silent -r ' + str(part_id[part_nr]) + ' 64 ' + in2_file + '/tempdir/tempfile/img-*/img-*.ubi', shell=True)
+        partition_replace(part_id[part_nr], 0x40, in2_file + '/tempdir/tempfile/img-' + d + '/img-' + d + '.ubi')
     else:
-        subprocess.run('python3 FWinfo.py -i ' + in_file + ' -silent -r ' + str(part_id[part_nr]) + ' ' + str(offset) + ' ' + in2_file + '/tempdir/tempfile/img-*/img-*.ubi', shell=True)
+        partition_replace(part_id[part_nr], offset, in2_file + '/tempdir/tempfile/img-' + d + '/img-' + d + '.ubi')
 
     # delete temp dir for info
     subprocess.run('rm -rf ' + in2_file + '/tempdir', shell=True)
-    
+
     # fix CRC
-    subprocess.run('python3 FWinfo.py -i ' + in_file + ' -silent -fixCRC', shell=True)
+    is_silent = 0
+    fixCRC(part_id[part_nr])
 
 
 
@@ -628,24 +641,26 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
     #dtb
     if partfirst4bytes == 0xD00DFEED:
         temp_parttype = 'device tree blob (dtb)'
+        CRC = 0
         if addinfo:
             part_type.append(temp_parttype)
             part_crc.append(0)
-            part_crcCalc.append(0)
+            part_crcCalc.append(CRC)
             fin.close()
-        return temp_parttype
+        return temp_parttype, CRC
 
 
     # uboot
     if partID == 3:
         temp_parttype = 'uboot'
         fin.seek(start_offset + 0x36E, 0)
+        CRC = MemCheck_CalcCheckSum16Bit(start_offset, part_size, 0x36E)
         if addinfo:
             part_type.append(temp_parttype)
             part_crc.append(struct.unpack('<H', fin.read(2))[0])
-            part_crcCalc.append(MemCheck_CalcCheckSum16Bit(start_offset, part_size, 0x36E))
+            part_crcCalc.append(CRC)
             fin.close()
-        return temp_parttype
+        return temp_parttype, CRC
 
 
     # uImage header
@@ -727,24 +742,26 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         ts = struct.unpack('>I', fin.read(4))[0]
         temp_parttype += ', created: ' + '\"\033[93m' + datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S') + '\033[0m\"'
 
+        CRC = 0
         if addinfo:
             part_type.append(temp_parttype)
             part_crc.append(0)
-            part_crcCalc.append(0)
+            part_crcCalc.append(CRC)
             fin.close()
-        return temp_parttype
+        return temp_parttype, CRC
 
 
     # Compressed ext4 file system SPARSE image format - бывает находится внутри CKSM
     if partfirst4bytes == 0x3AFF26ED:
         temp_parttype = '\033[93mSPARSE EXT4 image\033[0m'
+        CRC = 0
 
         if addinfo:
                 part_type.append(temp_parttype)
                 part_crc.append(0)
-                part_crcCalc.append(0)
+                part_crcCalc.append(CRC)
                 fin.close()
-        return temp_parttype
+        return temp_parttype, CRC
 
 
     # MODELEXT info header and data
@@ -760,12 +777,14 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
             fin.seek(2, 1)
             uiChkValue = struct.unpack('<H', fin.read(2))[0]
             
+            CRC = MemCheck_CalcCheckSum16Bit(start_offset, uilength, 0x36)
+            
             if addinfo:
                 part_type.append(temp_parttype)
                 part_crc.append(uiChkValue)
-                part_crcCalc.append(MemCheck_CalcCheckSum16Bit(start_offset, uilength, 0x36))
+                part_crcCalc.append(CRC)
                 fin.close()
-            return temp_parttype
+            return temp_parttype, CRC
 
 
     # BCL1
@@ -783,13 +802,14 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         unpackedSize = struct.unpack('>I', fin.read(4))[0]
         packedSize = struct.unpack('>I', fin.read(4))[0]
         temp_parttype += ' \033[93m' + str(unpackedSize) + '\033[0m packed to \033[93m' + str(packedSize) + '\033[0m bytes'
-
+        CRC = 0
+        
         if addinfo:
             part_type.append(temp_parttype)
             part_crc.append(0)
-            part_crcCalc.append(0)
+            part_crcCalc.append(CRC)
             fin.close()
-        return temp_parttype
+        return temp_parttype, CRC
 
 
     # UBI#
@@ -813,13 +833,14 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         UBIname = str(struct.unpack('%ds' % (id_length), fin.read(id_length))[0])[2:-1] #отрезает b` `
         # добавим считанное
         temp_parttype += ' \"\033[93m' + UBIname + '\033[0m\"'
-            
+        CRC = 0
+
         if addinfo:
             part_type.append(temp_parttype)
             part_crc.append(0)
-            part_crcCalc.append(0)
+            part_crcCalc.append(CRC)
             fin.close()
-        return temp_parttype
+        return temp_parttype, CRC
 
 
     # CKSM - внутри могут быть UBI or BCL1 or ...
@@ -840,16 +861,18 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
             #    temp_parttype += ' unknown EmbType'
 
             # смотрим что внутри CKSM
-            deeppart = GetPartitionInfo(start_offset + 0x40, 0, 0, 0)
+            deeppart, calcCRC = GetPartitionInfo(start_offset + 0x40, 0, 0, 0)
             if deeppart != '':
                 temp_parttype += '\033[94m<--\033[0m' + deeppart
+
+            CRC = MemCheck_CalcCheckSum16Bit(start_offset, uiDataOffset + uiDataSize + uiPaddingSize, 0xC)
 
             if addinfo:
                 part_type.append(temp_parttype)
                 part_crc.append(uiChkValue)
-                part_crcCalc.append(MemCheck_CalcCheckSum16Bit(start_offset, uiDataOffset + uiDataSize + uiPaddingSize, 0xC))
+                part_crcCalc.append(CRC)
                 fin.close()
-            return temp_parttype
+            return temp_parttype, CRC
 
 
     # unknown part
@@ -858,11 +881,77 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         part_crc.append(0)
         part_crcCalc.append(0)
         fin.close()
-    return ''
+    return '', 0
 
 
 
 
+def partition_replace(is_replace, is_replace_offset, is_replace_file):
+    global partitions_count
+
+    part_nr = -1
+    for a in range(partitions_count):
+        if part_id[a] == is_replace:
+            part_nr = a
+            break
+    if part_nr != -1:
+        if is_silent != 1:
+            print('Replace partition ID %i from 0x%08X + 0x%08X using inputfile \033[93m%s\033[0m' % (is_replace, part_startoffset[part_nr], is_replace_offset, is_replace_file))
+        freplace = open(is_replace_file, 'rb')
+        freplacedata = freplace.read()
+        freplace.close()
+        
+        if (len(freplacedata) + is_replace_offset) == part_size[part_nr]:
+            fin = open(in_file, 'r+b')
+            fin.seek(part_startoffset[part_nr] + is_replace_offset, 0)
+            fin.write(freplacedata)
+            fin.close()
+        else:
+            print('\033[91mError: Input data size and partition size is not same! Cancelled.\033[0m')
+    else:
+        print('\033[91mCould not find partiton with ID %i\033[0m' % is_replace)
+
+
+
+def fixCRC(partID):
+    global partitions_count
+    
+    for a in range(partitions_count):
+        if part_id[a] == partID:
+            # recalculate CRC of replaced partititon
+            text, calcCRC = GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a], 0)
+            
+            if part_crc[a] != calcCRC:
+                # fix CRC for uboot
+                if part_type[a] == 'uboot':
+                    fin = open(in_file, 'r+b')
+                    fin.seek(part_startoffset[a] + 0x36E, 0)
+                    fin.write(struct.pack('<H', calcCRC))
+                    fin.close()
+                    if is_silent != 1:
+                        print('Partition ID ' + str(part_id[a]) + ' - \033[94mCRC fixed\033[0m')
+                    return
+                # fix CRC for MODELEXT
+                if part_type[a][:13] == 'MODELEXT INFO':
+                    fin = open(in_file, 'r+b')
+                    fin.seek(part_startoffset[a] + 0x36, 0)
+                    fin.write(struct.pack('<H', calcCRC))
+                    fin.close()
+                    if is_silent != 1:
+                        print('Partition ID ' + str(part_id[a]) + ' - \033[94mCRC fixed\033[0m')
+                    return
+                # fix CRC for CKSM
+                if part_type[a][:13] == '\033[93mCKSM\033[0m':
+                    fin = open(in_file, 'r+b')
+                    fin.seek(part_startoffset[a] + 0xC, 0)
+                    fin.write(struct.pack('<I', calcCRC))
+                    fin.close()
+                    if is_silent != 1:
+                        print('Partition ID ' + str(part_id[a]) + ' - \033[94mCRC fixed\033[0m')
+                    return
+            else:
+                if is_silent != 1:
+                    print('Partition ID ' + str(part_id[a]) + ' - fix CRC not required')
 
 
 def main():
@@ -870,8 +959,9 @@ def main():
     #global in_offset
     global out_file
     in_file, is_extract, is_extract_offset, is_extract_all, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, is_compress, is_compress_offset, fixCRC_partID = get_args()
-    partitions_count = 0
+    global partitions_count
 
+    partitions_count = 0
     fin = open(in_file, 'rb')
 
     #os.system('color')
@@ -966,19 +1056,31 @@ def main():
                 print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
             else:
                 print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m' % (checksum_value, CRC_FW))
-        
-        
+
+
         # read partitions table info
         fin.seek(NVTPACK_FW_HDR2_size, 0)
-        
-            
+
+
         for a in range(partitions_count):
             part_startoffset.append(struct.unpack('<I', fin.read(4))[0])
             part_size.append(struct.unpack('<I', fin.read(4))[0])
             part_id.append(struct.unpack('<I', fin.read(4))[0])
             part_endoffset.append(part_startoffset[a] + part_size[a])
-    
-    
+
+
+        # read each partition info
+        for a in range(partitions_count):
+            GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a])
+
+        fin.close()
+
+
+        # looking into dtb partition for partition id - name - filename info
+        SearchPartNamesInDTB(partitions_count)
+        
+        
+        
     
     # для всех - и для FW_HDR и для FW_HDR2
     
@@ -1032,29 +1134,8 @@ def main():
 
     # replace partition by ID with inputfile
     if is_replace != -1:
-        part_nr = -1
-        for a in range(partitions_count):
-            if part_id[a] == is_replace:
-                part_nr = a
-                break
-        if part_nr != -1:
-            if is_silent != 1:
-                print('Replace partition ID %i from 0x%08X + 0x%08X using inputfile \033[93m%s\033[0m' % (is_replace, part_startoffset[part_nr], is_replace_offset, is_replace_file))
-            fin.close()
-            freplace = open(is_replace_file, 'rb')
-            freplacedata = freplace.read()
-            freplace.close()
-            
-            if (len(freplacedata) + is_replace_offset) == part_size[part_nr]:
-                fin = open(in_file, 'r+b')
-                fin.seek(part_startoffset[part_nr] + is_replace_offset, 0)
-                fin.write(freplacedata)
-                fin.close()
-            else:
-                print('\033[91mError: Input data size and partition size is not same! Cancelled.\033[0m')
-        else:
-            print('\033[91mCould not find partiton with ID %i\033[0m' % is_replace)
         fin.close()
+        partition_replace(is_replace, is_replace_offset, is_replace_file)
         exit(0)
 
 
@@ -1104,7 +1185,7 @@ def main():
                 break
         if part_nr != -1:
             in2_file = in_file + '-uncomp_partitionID' + str(part_id[part_nr])
-            
+
             if is_compress_offset != -1:
                 if is_silent != 1:
                     print('Compress \033[93m%s\033[0m to partition ID %i at 0x%08X + 0x%08X' % (in2_file, part_id[part_nr], part_startoffset[part_nr], is_compress_offset))
@@ -1113,23 +1194,14 @@ def main():
                     print('Compress \033[93m%s\033[0m to partition ID %i at 0x%08X' % (in2_file, part_id[part_nr], part_startoffset[part_nr]))
 
             compress(part_nr, is_compress_offset, in2_file)
-            
+
         else:
             print('\033[91mCould not find partiton with ID %i\033[0m' % is_compress)
         fin.close()
         exit(0)
 
 
-    if FW_HDR2 == 1:
-        # read each partition info
-        for a in range(partitions_count):
-            GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a])
-    
-        fin.close()
-    
-    
-        # looking into dtb partition for partition id - name - filename info
-        SearchPartNamesInDTB(partitions_count)
+
 
 
 
@@ -1150,12 +1222,14 @@ def main():
                             fin.seek(part_startoffset[a] + 0x36E, 0)
                             fin.write(struct.pack('<H', part_crcCalc[a]))
                             fin.close()
+                            part_type[a] += ', \033[94mCRC fixed\033[0m'
                         # fix CRC for MODELEXT
                         if part_type[a][:13] == 'MODELEXT INFO':
                             fin = open(in_file, 'r+b')
                             fin.seek(part_startoffset[a] + 0x36, 0)
                             fin.write(struct.pack('<H', part_crcCalc[a]))
                             fin.close()
+                            part_type[a] += ', \033[94mCRC fixed\033[0m'
                         # fix CRC for CKSM
                         if part_type[a][:13] == '\033[93mCKSM\033[0m':
                             fin = open(in_file, 'r+b')
@@ -1183,12 +1257,14 @@ def main():
                             fin.seek(part_startoffset[a] + 0x36E, 0)
                             fin.write(struct.pack('<H', part_crcCalc[a]))
                             fin.close()
+                            part_type[a] += ', \033[94mCRC fixed\033[0m'
                         # fix CRC for MODELEXT
                         if part_type[a][:13] == 'MODELEXT INFO':
                             fin = open(in_file, 'r+b')
                             fin.seek(part_startoffset[a] + 0x36, 0)
                             fin.write(struct.pack('<H', part_crcCalc[a]))
                             fin.close()
+                            part_type[a] += ', \033[94mCRC fixed\033[0m'
                         # fix CRC for CKSM
                         if part_type[a][:13] == '\033[93mCKSM\033[0m':
                             fin = open(in_file, 'r+b')
