@@ -953,6 +953,20 @@ def fixCRC(partID):
                 if is_silent != 1:
                     print('Partition ID ' + str(part_id[a]) + ' - fix CRC not required')
 
+    # fix CRC for whole file
+    if FW_HDR2 == 1:
+        CRC_FW = MemCheck_CalcCheckSum16Bit(0, total_file_size, 0x24)
+        if checksum_value == CRC_FW:
+            if is_silent != 1:
+                print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+        else:
+            fin = open(in_file, 'r+b')
+            fin.seek(0x24, 0) # for NVTPACK_FW_HDR2
+            fin.write(struct.pack('<I', CRC_FW))
+            fin.close()
+            if is_silent != 1:
+                print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
+
 
 def main():
     global in_file
@@ -966,9 +980,10 @@ def main():
 
     #os.system('color')
 
-    # NVTPACK_FW_HDR2 GUID check
+    FW_HDR = 0
     FW_HDR2 = 0
     
+    # NVTPACK_FW_HDR2 GUID check
     if struct.unpack('<I', fin.read(4))[0] == 0xD6012E07:
         if struct.unpack('<H', fin.read(2))[0] == 0x10BC:
             if struct.unpack('<H', fin.read(2))[0] == 0x4F91:
@@ -989,13 +1004,14 @@ def main():
             part_size.append(struct.unpack('>I', fin.read(4))[0] + 0x10)  # + 0x10 потому что мы будем показывать размер партиции с заголовком а не размер данных внутри BCL1
             part_id.append(0)
             part_endoffset.append(0 + part_size[0])
-            
+
             fin.seek(part_size[0], 0)
             #тут должен быть NVTPACK_FW_HDR
             FW_HDR = 0
             #проверим не в конце ли мы файла уже
             if (fin.tell() + 0x10) < os.stat(in_file).st_size:
                 # если не в конце то проверяем дальше
+                # NVTPACK_FW_HDR GUID check
                 if struct.unpack('<I', fin.read(4))[0] == 0x8827BE90:
                     if struct.unpack('<H', fin.read(2))[0] == 0x36CD:
                         if struct.unpack('<H', fin.read(2))[0] == 0x4FC2:
@@ -1010,9 +1026,20 @@ def main():
                 if is_silent != 1:
                     print("\033[93mNVTPACK_FW_HDR\033[0m found")
                 NVTPACK_FW_HDR_AND_PARTITIONS_size = struct.unpack('<I', fin.read(4))[0]
-                checksum = struct.unpack('<I', fin.read(4))[0]
+                checksum_value = struct.unpack('<I', fin.read(4))[0]
                 partitions_count = struct.unpack('<I', fin.read(4))[0] + 1  # + 1 так как есть еще нулевая BCL1 партиция
                 print('Found \033[93m%i\033[0m partitions' % (partitions_count))
+
+                # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
+                if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
+                    CRC_FW = MemCheck_CalcCheckSum16Bit(part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
+                    if checksum_value == CRC_FW:
+                        print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+                    else:
+                        print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m' % (checksum_value, CRC_FW))
+
+                # read partitions table info
+                fin.seek(part_size[0] + 0x1C, 0)
 
                 for a in range(partitions_count):
                     a = 1 # так как нулевую партицию мы уже занесли в массивы
@@ -1020,16 +1047,16 @@ def main():
                     part_size.append(struct.unpack('<I', fin.read(4))[0])
                     part_id.append(struct.unpack('<I', fin.read(4))[0])
                     part_endoffset.append(part_startoffset[a] + part_size[a])
-        
+
             # read each partition info
             for a in range(partitions_count):
                 GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a])
         else:
             print("\033[91mBCL1\033[0m not found")
+            exit(0) # ничего не найдено
 
-        fin.close()
 
-    
+
     if FW_HDR2 == 1:
         # NVTPACK_FW_HDR2_VERSION check
         if struct.unpack('<I', fin.read(4))[0] == 0x16071515:
@@ -1277,12 +1304,27 @@ def main():
             print(" ----------------------------------------------------------------------------------------------------------------------")
 
         if fixCRC_partID != -1:
-            CRC_FW = MemCheck_CalcCheckSum16Bit(0, total_file_size, 0x24)
-            if checksum_value == CRC_FW:
-                print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+            if FW_HDR2 == 1:
+                CRC_FW = MemCheck_CalcCheckSum16Bit(0, total_file_size, 0x24)
+                if checksum_value == CRC_FW:
+                    print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+                else:
+                    fin = open(in_file, 'r+b')
+                    fin.seek(0x24, 0) # for NVTPACK_FW_HDR2
+                    fin.write(struct.pack('<I', CRC_FW))
+                    fin.close()
+                    print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
             else:
-                print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m' % (checksum_value, CRC_FW))
-
+                if FW_HDR == 1:
+                    CRC_FW = MemCheck_CalcCheckSum16Bit(part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
+                    if checksum_value == CRC_FW:
+                        print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+                    else:
+                        fin = open(in_file, 'r+b')
+                        fin.seek(part_size[0] + 0x14, 0) # for NVTPACK_FW_HDR
+                        fin.write(struct.pack('<I', CRC_FW))
+                        fin.close()
+                        print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
 
 
 
