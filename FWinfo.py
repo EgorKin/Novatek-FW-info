@@ -12,7 +12,8 @@
 # V3.7 - parse UBI volume names
 # V3.8 - for -u command: if start offset not defined - auto skip CKSM header size (0x40 bytes) for CKSM partition; if offset set to 0 - force use 0 (does not use auto skip)
 # V3.9 - extract files from UBI via -u command using ubireader
-# V4.0 - add -c command: compress partition by ID and merge to firmware file (only CKSM<--UBI support now, WIP)
+# V4.0 - add -c command: compress partition by ID and merge to firmware file (only CKSM<--UBI support now)
+# V4.1 - support change partition size for -c command
 
 
 import os, struct, sys, argparse, array
@@ -885,9 +886,42 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
 
 
+def partition_extract(is_extract, is_extract_offset):
+    global partitions_count
+
+    part_nr = -1
+    for a in range(partitions_count):
+        if part_id[a] == is_extract:
+            part_nr = a
+            break
+    if part_nr != -1:
+        out_file = in_file + '-partitionID' + str(part_id[part_nr])
+
+        if is_extract_offset != -1:
+            if is_silent != 1:
+                print('Extract partition ID %i from 0x%08X + 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], is_extract_offset, out_file))
+        else:
+            if is_silent != 1:
+                print('Extract partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], out_file))
+            is_extract_offset = 0
+
+        fin = open(in_file, 'r+b')
+        fin.seek(part_startoffset[part_nr] + is_extract_offset, 0)
+        finread = fin.read(part_size[part_nr] - is_extract_offset)
+        fin.close()
+
+        fpartout = open(out_file, 'w+b')
+        fpartout.write(finread)
+        fpartout.close()
+    else:
+        print('\033[91mCould not find partiton with ID %i\033[0m' % is_extract)
+
+
 
 def partition_replace(is_replace, is_replace_offset, is_replace_file):
     global partitions_count
+    global NVTPACK_FW_HDR2_size
+    global total_file_size
 
     part_nr = -1
     for a in range(partitions_count):
@@ -898,16 +932,83 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
         if is_silent != 1:
             print('Replace partition ID %i from 0x%08X + 0x%08X using inputfile \033[93m%s\033[0m' % (is_replace, part_startoffset[part_nr], is_replace_offset, is_replace_file))
         freplace = open(is_replace_file, 'rb')
-        freplacedata = freplace.read()
+        replacedata = freplace.read()
         freplace.close()
         
-        if (len(freplacedata) + is_replace_offset) == part_size[part_nr]:
+        if (len(replacedata) + is_replace_offset) == part_size[part_nr]:
             fin = open(in_file, 'r+b')
             fin.seek(part_startoffset[part_nr] + is_replace_offset, 0)
-            fin.write(freplacedata)
+            fin.write(replacedata)
             fin.close()
         else:
-            print('\033[91mError: Input data size and partition size is not same! Cancelled.\033[0m')
+            # размер партиции изменился - надо всё передвигать и обновлять заголовки
+            # для современной версии прошивок
+            if FW_HDR2 == 1:
+                fin = open(in_file, 'rb')
+                # если заменяемая партиция не последняя то
+                if part_nr + 1 < partitions_count:
+                    fin.seek(part_startoffset[part_nr + 1], 0)
+                    #print('enddata start at 0x%08X' % part_startoffset[part_nr + 1])
+                    enddata = fin.read() # считали всё после заменяемой партиции
+                fin.close()
+                
+                # заменим данные в таблице партиций: [part_startoffset, part_size, part_id]
+                fin = open(in_file, 'r+b') # именно r+b для ЗАМЕНЫ данных
+                fin.seek(NVTPACK_FW_HDR2_size + (part_nr * 12), 0)
+                fin.seek(4, 1) # part_startoffset не поменяется
+                # высчитаем сколько нужно 00 для выравнивания новой партиции до кратности 4 байт
+                alignsize = (4 - ((len(replacedata) + is_replace_offset)%4))
+                if alignsize == 4:
+                    alignsize = 0
+                newsize = len(replacedata) + is_replace_offset + alignsize
+                sizediff = newsize - part_size[part_nr] # разница в размерах - может быть отрицательной
+                #print('alignsize %d' % alignsize)
+                #print('newsize %d' % newsize)
+                #print('sizediff %d' % sizediff)
+                #print('write newsize to 0x%08X' % (NVTPACK_FW_HDR2_size + (part_nr * 12) + 4))
+                fin.write(struct.pack('<I', newsize)) # заменим part_size новым с выравниванием до 4 байт
+                part_size[part_nr] = newsize # корректируем данные в нашей таблице
+                fin.seek(4, 1) #пропустим part_id
+                
+                # пересчитаем part_startoffset для партиций идущих следом за заменяемой
+                a = part_nr + 1
+                while(a < partitions_count):
+                    fin.write(struct.pack('<I', part_startoffset[a] + sizediff))
+                    part_startoffset[a] = part_startoffset[a] + sizediff # корректируем данные в нашей таблице
+                    fin.seek(8, 1)
+                    a += 1
+
+                # заменим партицию
+                #print('replace part at 0x%08X' % (part_startoffset[part_nr] + is_replace_offset))
+                fin.seek(part_startoffset[part_nr] + is_replace_offset, 0)
+                fin.write(replacedata)
+                
+                # добавим сколько надо 00 для выравнивания до 4 байт
+                for b in range(alignsize):
+                    fin.write(struct.pack('B', 0))
+                
+                # если заменяемая партиция не последняя то
+                if part_nr + 1 < partitions_count:
+                    # допишем оставшиеся партиции
+                    fin.write(enddata)
+                fin.truncate() # изменим размер файла
+                fin.close()
+                
+                filesize = os.path.getsize(in_file)
+                # пересчитаем TotalSize в NVTPACK_FW_HDR2
+                fin = open(in_file, 'r+b') # именно r+b для ЗАМЕНЫ данных
+                fin.seek(28, 0)
+                fin.write(struct.pack('<I', filesize))
+                total_file_size = filesize # корректируем данные в нашей таблице
+
+                # если заменяем CKSM-партицию то в её заголовке нужно исправить DataSize
+                if part_type[part_nr][:13] == '\033[93mCKSM\033[0m':
+                    fin.seek(part_startoffset[part_nr] + 0x14, 0)
+                    fin.write(struct.pack('<I', newsize - is_replace_offset))
+                    
+                fin.close()
+            else:
+                print('\033[91mError: Input data size and partition size is not same! Cancelled.\033[0m')
     else:
         print('\033[91mCould not find partiton with ID %i\033[0m' % is_replace)
 
@@ -930,7 +1031,7 @@ def fixCRC(partID):
                     fin.close()
                     if is_silent != 1:
                         print('Partition ID ' + str(part_id[a]) + ' - \033[94mCRC fixed\033[0m')
-                    return
+                    break
                 # fix CRC for MODELEXT
                 if part_type[a][:13] == 'MODELEXT INFO':
                     fin = open(in_file, 'r+b')
@@ -939,7 +1040,7 @@ def fixCRC(partID):
                     fin.close()
                     if is_silent != 1:
                         print('Partition ID ' + str(part_id[a]) + ' - \033[94mCRC fixed\033[0m')
-                    return
+                    break
                 # fix CRC for CKSM
                 if part_type[a][:13] == '\033[93mCKSM\033[0m':
                     fin = open(in_file, 'r+b')
@@ -948,7 +1049,7 @@ def fixCRC(partID):
                     fin.close()
                     if is_silent != 1:
                         print('Partition ID ' + str(part_id[a]) + ' - \033[94mCRC fixed\033[0m')
-                    return
+                    break
             else:
                 if is_silent != 1:
                     print('Partition ID ' + str(part_id[a]) + ' - fix CRC not required')
@@ -967,6 +1068,21 @@ def fixCRC(partID):
             if is_silent != 1:
                 print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
 
+    else:
+        if FW_HDR == 1:
+            CRC_FW = MemCheck_CalcCheckSum16Bit(part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
+            if checksum_value == CRC_FW:
+                if is_silent != 1:
+                    print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+            else:
+                fin = open(in_file, 'r+b')
+                fin.seek(part_size[0] + 0x14, 0) # for NVTPACK_FW_HDR
+                fin.write(struct.pack('<I', CRC_FW))
+                fin.close()
+                if is_silent != 1:
+                    print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
+
+
 
 def main():
     global in_file
@@ -974,6 +1090,11 @@ def main():
     global out_file
     in_file, is_extract, is_extract_offset, is_extract_all, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, is_compress, is_compress_offset, fixCRC_partID = get_args()
     global partitions_count
+    global FW_HDR
+    global FW_HDR2
+    global NVTPACK_FW_HDR2_size
+    global total_file_size
+    global checksum_value
 
     partitions_count = 0
     fin = open(in_file, 'rb')
@@ -1071,9 +1192,8 @@ def main():
         total_file_size = struct.unpack('<I', fin.read(4))[0]
         checksum_method = struct.unpack('<I', fin.read(4))[0]
         checksum_value = struct.unpack('<I', fin.read(4))[0]
-        if is_silent != 1:
-            print('Found \033[93m%i\033[0m partitions' % partitions_count)
-            print('Firmware file size \033[93m{:>11,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
+        print('Found \033[93m%i\033[0m partitions' % partitions_count)
+        print('Firmware file size \033[93m{:>11,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
     
     
         # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
@@ -1110,49 +1230,14 @@ def main():
     
     # extract partition by ID to outputfile
     if is_extract != -1:
-        part_nr = -1
+        fin.close()
         if is_extract_all != 1:
-            for a in range(partitions_count):
-                if part_id[a] == is_extract:
-                    part_nr = a
-                    break
-            if part_nr != -1:
-                out_file = in_file + '-partitionID' + str(part_id[part_nr])
-                
-                if is_extract_offset != -1:
-                    if is_silent != 1:
-                        print('Extract partition ID %i from 0x%08X + 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], is_extract_offset, out_file))
-                else:
-                    if is_silent != 1:
-                        print('Extract partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], out_file))
-                    is_extract_offset = 0
-
-                fin.seek(part_startoffset[part_nr] + is_extract_offset, 0)
-                finread = fin.read(part_size[part_nr] - is_extract_offset)
-                
-                fpartout = open(out_file, 'w+b')
-                fpartout.write(finread)
-                fpartout.close()
-            else:
-                print('\033[91mCould not find partiton with ID %i\033[0m' % is_extract)
+            # extract partition by ID
+            partition_extract(is_extract, is_extract_offset)
         else:
             # extract all partitions
             for part_nr in range(partitions_count):
-                if part_nr != -1:
-                    out_file = in_file + '-partitionID' + str(part_id[part_nr])
-                    
-                    if is_silent != 1:
-                        print('Extract partition ID %i from 0x%08X to file \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], out_file))
-                    fin.seek(part_startoffset[part_nr], 0)
-                    finread = fin.read(part_size[part_nr])
-                    
-                    fpartout = open(out_file, 'w+b')
-                    fpartout.write(finread)
-                    fpartout.close()
-                else:
-                    print('\033[91mCould not find partiton with ID %i\033[0m' % part_id[part_nr])
-                    
-        fin.close()
+                partition_extract(part_nr, -1) # -1 в функции преобразуется в 0, нужен чтобы не писать "from 0x%08X + 0x%08X to file"
         exit(0)
 
 
@@ -1173,11 +1258,10 @@ def main():
         if part_nr != -1:
             out_file = in_file + '-uncomp_partitionID' + str(part_id[part_nr])
             
-            if is_uncompress_offset != -1:
-                if is_silent != 1:
+            if is_silent != 1:
+                if is_uncompress_offset != -1:
                     print('Uncompress partition ID %i from 0x%08X + 0x%08X to \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], is_uncompress_offset, out_file))
-            else:
-                if is_silent != 1:
+                else:
                     print('Uncompress partition ID %i from 0x%08X to \033[93m%s\033[0m' % (part_id[part_nr], part_startoffset[part_nr], out_file))
 
             # if offset not defined - auto skip CKSM header size (0x40 bytes)
@@ -1210,11 +1294,10 @@ def main():
         if part_nr != -1:
             in2_file = in_file + '-uncomp_partitionID' + str(part_id[part_nr])
 
-            if is_compress_offset != -1:
-                if is_silent != 1:
+            if is_silent != 1:
+                if is_compress_offset != -1:
                     print('Compress \033[93m%s\033[0m to partition ID %i at 0x%08X + 0x%08X' % (in2_file, part_id[part_nr], part_startoffset[part_nr], is_compress_offset))
-            else:
-                if is_silent != 1:
+                else:
                     print('Compress \033[93m%s\033[0m to partition ID %i at 0x%08X' % (in2_file, part_id[part_nr], part_startoffset[part_nr]))
 
             compress(part_nr, is_compress_offset, in2_file)
