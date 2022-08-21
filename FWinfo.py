@@ -962,19 +962,25 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                     alignsize = 0
                 newsize = len(replacedata) + is_replace_offset + alignsize
                 sizediff = newsize - part_size[part_nr] # разница в размерах - может быть отрицательной
+                # бывают прошивки где между part_startoffset+part_size и началом следующей партиции есть место, неиспользуемое но оно есть
+                # и это влияет на part_startoffset следующей партиции - надо это учесть так как мы-то заменим партицию и уберем лишние данные в конце
+                correction_datasize = part_startoffset[part_nr + 1] - (part_startoffset[part_nr] + part_size[part_nr])
+                sizediff -= correction_datasize # вычтем размер лишних в старой партиции данных в её конце
+
                 #print('alignsize %d' % alignsize)
                 #print('newsize %d' % newsize)
                 #print('sizediff %d' % sizediff)
+                #print('correction_datasize %d' % correction_datasize)
                 #print('write newsize to 0x%08X' % (NVTPACK_FW_HDR2_size + (part_nr * 12) + 4))
                 fin.write(struct.pack('<I', newsize)) # заменим part_size новым с выравниванием до 4 байт
-                part_size[part_nr] = newsize # корректируем данные в нашей таблице
+                part_size[part_nr] = newsize # корректируем данные в нашей переменной
                 fin.seek(4, 1) #пропустим part_id
                 
                 # пересчитаем part_startoffset для партиций идущих следом за заменяемой
                 a = part_nr + 1
                 while(a < partitions_count):
                     fin.write(struct.pack('<I', part_startoffset[a] + sizediff))
-                    part_startoffset[a] = part_startoffset[a] + sizediff # корректируем данные в нашей таблице
+                    part_startoffset[a] = part_startoffset[a] + sizediff # корректируем данные в нашей переменной
                     fin.seek(8, 1)
                     a += 1
 
@@ -999,7 +1005,7 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                 fin = open(in_file, 'r+b') # именно r+b для ЗАМЕНЫ данных
                 fin.seek(28, 0)
                 fin.write(struct.pack('<I', filesize))
-                total_file_size = filesize # корректируем данные в нашей таблице
+                total_file_size = filesize # корректируем данные в нашей переменной
 
                 # если заменяем CKSM-партицию то в её заголовке нужно исправить DataSize
                 if part_type[part_nr][:13] == '\033[93mCKSM\033[0m':
