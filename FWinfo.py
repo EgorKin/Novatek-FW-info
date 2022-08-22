@@ -949,7 +949,7 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                 if part_nr + 1 < partitions_count:
                     fin.seek(part_startoffset[part_nr + 1], 0)
                     #print('enddata start at 0x%08X' % part_startoffset[part_nr + 1])
-                    enddata = fin.read() # считали всё после заменяемой партиции
+                    enddata = fin.read() # считали все партиции после заменяемой партиции
                 fin.close()
                 
                 # заменим данные в таблице партиций: [part_startoffset, part_size, part_id]
@@ -957,20 +957,18 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                 fin.seek(NVTPACK_FW_HDR2_size + (part_nr * 12), 0)
                 fin.seek(4, 1) # part_startoffset не поменяется
                 # высчитаем сколько нужно 00 для выравнивания новой партиции до кратности 4 байт
-                alignsize = (4 - ((len(replacedata) + is_replace_offset)%4))
-                if alignsize == 4:
-                    alignsize = 0
-                newsize = len(replacedata) + is_replace_offset + alignsize
-                sizediff = newsize - part_size[part_nr] # разница в размерах - может быть отрицательной
-                # бывают прошивки где между part_startoffset+part_size и началом следующей партиции есть место, неиспользуемое но оно есть
-                # и это влияет на part_startoffset следующей партиции - надо это учесть так как мы-то заменим партицию и уберем лишние данные в конце
-                correction_datasize = part_startoffset[part_nr + 1] - (part_startoffset[part_nr] + part_size[part_nr])
-                sizediff -= correction_datasize # вычтем размер лишних в старой партиции данных в её конце
+                newalignsize = (4 - ((len(replacedata) + is_replace_offset)%4))
+                if newalignsize == 4:
+                    newalignsize = 0
+                newsize = len(replacedata) + is_replace_offset + newalignsize
+                # бывают прошивки где между part_startoffset+part_size и началом следующей партиции есть место (больше чем требуется для выравнивания по 4 байта), неиспользуемое но оно есть
+                # поэтому вычитаем не part_size[part_nr] + oldalignsize
+                # а (part_startoffset[part_nr + 1] - part_startoffset[part_nr]) - полный размер партиции = полезный размер + выравнивание до 4 байт + неиспользуемые данные 00 до след. партиции
+                sizediff = newsize - (part_startoffset[part_nr + 1] - part_startoffset[part_nr]) # разница в размерах - может быть отрицательной
 
-                #print('alignsize %d' % alignsize)
+                #print('new alignsize %d' % newalignsize)
                 #print('newsize %d' % newsize)
                 #print('sizediff %d' % sizediff)
-                #print('correction_datasize %d' % correction_datasize)
                 #print('write newsize to 0x%08X' % (NVTPACK_FW_HDR2_size + (part_nr * 12) + 4))
                 fin.write(struct.pack('<I', newsize)) # заменим part_size новым с выравниванием до 4 байт
                 part_size[part_nr] = newsize # корректируем данные в нашей переменной
@@ -990,7 +988,7 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                 fin.write(replacedata)
                 
                 # добавим сколько надо 00 для выравнивания до 4 байт
-                for b in range(alignsize):
+                for b in range(newalignsize):
                     fin.write(struct.pack('B', 0))
                 
                 # если заменяемая партиция не последняя то
