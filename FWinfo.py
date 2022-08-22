@@ -12,8 +12,9 @@
 # V3.7 - parse UBI volume names
 # V3.8 - for -u command: if start offset not defined - auto skip CKSM header size (0x40 bytes) for CKSM partition; if offset set to 0 - force use 0 (does not use auto skip)
 # V3.9 - extract files from UBI via -u command using ubireader
-# V4.0 - add -c command: compress partition by ID and merge to firmware file (only CKSM<--UBI support now)
+# V4.0 - add -c command: compress partition by ID and merge to firmware file
 # V4.1 - support change partition size for -c command
+# V4.2 - add support CKSM<--BCL1 and BCL1 partitions for -c command (except LZ compression)
 
 
 import os, struct, sys, argparse, array
@@ -288,7 +289,7 @@ def MemCheck_CalcCheckSum16Bit(in_offset, uiLen, ignoreCRCoffset):
 
 
 
-def compress(part_nr, offset, in2_file):
+def compress_CKSM_UBI(part_nr, in2_file):
     global in_file
 
     fin = open(in_file, 'rb')
@@ -299,7 +300,7 @@ def compress(part_nr, offset, in2_file):
         print('\033[91mNot CKSM partition, exit\033[0m')
         exit(0)
 
-    # skip CKSM
+    # skip CKSM header
     fin.seek(part_startoffset[part_nr] + 0x40, 0)
 
     FourCC = fin.read(4)
@@ -339,7 +340,7 @@ def compress(part_nr, offset, in2_file):
 
     # d[2:-1] уберем ./ в начале и новую строку в конце имени папки
     d = d[2:-1]
-    
+
     # fix ini-file: delete line "vol_flags=0" it cause error "unknown flags"
     subprocess.run('(cd ' + in2_file + '/tempdir/tempfile/img-' + d + ' && sed -i "/vol_flags = 0/d" img-' + d + '.ini)', shell=True)
 
@@ -349,12 +350,9 @@ def compress(part_nr, offset, in2_file):
     # hide output print
     global is_silent
     is_silent = 1
-    
+
     # replace partition
-    if offset == -1:
-        partition_replace(part_id[part_nr], 0x40, in2_file + '/tempdir/tempfile/img-' + d + '/img-' + d + '.ubi')
-    else:
-        partition_replace(part_id[part_nr], offset, in2_file + '/tempdir/tempfile/img-' + d + '/img-' + d + '.ubi')
+    partition_replace(part_id[part_nr], 0x40, in2_file + '/tempdir/tempfile/img-' + d + '/img-' + d + '.ubi')
 
     # delete temp dir for info
     subprocess.run('rm -rf ' + in2_file + '/tempdir', shell=True)
@@ -362,6 +360,197 @@ def compress(part_nr, offset, in2_file):
     # fix CRC
     is_silent = 0
     fixCRC(part_id[part_nr])
+
+
+
+def compress_CKSM_BCL(part_nr, in2_file):
+    global in_file
+
+    fin = open(in_file, 'rb')
+    fin.seek(part_startoffset[part_nr], 0)
+    FourCC = fin.read(4)
+
+    if FourCC != b'CKSM':
+        print('\033[91mNot CKSM partition, exit\033[0m')
+        exit(0)
+
+    # skip CKSM header
+    fin.seek(part_startoffset[part_nr] + 0x40, 0)
+
+    FourCC = fin.read(4)
+    if FourCC != b'BCL1':
+        print('\033[91mNot BCL1 into CKSM partition, exit\033[0m')
+        exit(0)
+
+    # для BCL1 на вход должен подаваться файл
+    if not os.path.exists(in2_file):
+        print('\033[91m%s file does not found, exit\033[0m' % in2_file)
+        exit(0)
+
+    # compress uncomp_partitionID to comp_partitionID
+    BCL1_compress(part_nr, 0x40, in2_file)
+
+    comp_filename = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
+    # проверим прошла ли упаковка успешно
+    if not os.path.exists(comp_filename):
+        print('\033[91m%s compressed file does not found, exit\033[0m' % in2_file)
+        exit(0)
+
+    # hide output print
+    global is_silent
+    is_silent = 1
+
+    # replace partition
+    partition_replace(part_id[part_nr], 0x40, comp_filename)
+
+    # fix CRC
+    is_silent = 0
+    fixCRC(part_id[part_nr])
+
+
+
+def compress_BCL(part_nr, in2_file):
+    global in_file
+
+    fin = open(in_file, 'rb')
+    fin.seek(part_startoffset[part_nr], 0)
+
+    FourCC = fin.read(4)
+    if FourCC != b'BCL1':
+        print('\033[91mNot BCL1 partition, exit\033[0m')
+        exit(0)
+
+    # для BCL1 на вход должен подаваться файл
+    if not os.path.exists(in2_file):
+        print('\033[91m%s file does not found, exit\033[0m' % in2_file)
+        exit(0)
+
+    # compress uncomp_partitionID to comp_partitionID
+    BCL1_compress(part_nr, 0, in2_file)
+
+    comp_filename = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
+    # проверим прошла ли упаковка успешно
+    if not os.path.exists(comp_filename):
+        print('\033[91m%s compressed file does not found, exit\033[0m' % in2_file)
+        exit(0)
+
+    # hide output print
+    global is_silent
+    is_silent = 1
+
+    # replace partition
+    partition_replace(part_id[part_nr], 0, comp_filename)
+
+    # fix CRC
+    is_silent = 0
+    fixCRC(part_id[part_nr])
+
+
+
+def compress(part_nr, in2_file):
+    global in_file
+
+    fin = open(in_file, 'rb')
+    fin.seek(part_startoffset[part_nr], 0)
+    FourCC = fin.read(4)
+
+    if FourCC == b'CKSM':
+        # skip CKSM header
+        fin.seek(part_startoffset[part_nr] + 0x40, 0)
+        FourCC = fin.read(4)
+
+        # CKSM<--UBI#
+        if FourCC == b'UBI#':
+            fin.close()
+            compress_CKSM_UBI(part_nr, in2_file)
+            return
+
+        # CKSM<--BCL1
+        if FourCC == b'BCL1':
+            fin.close()
+            compress_CKSM_BCL(part_nr, in2_file)
+            return
+    else:
+        # BCL1
+        if FourCC == b'BCL1':
+            fin.close()
+            compress_BCL(part_nr, in2_file)
+            return
+
+    print("\033[91mThis partition type is not supported for compression\033[0m")
+    exit(0)
+
+
+
+def BCL1_compress(part_nr, in_offset, in2_file):
+    global in_file
+
+    fin = open(in_file, 'rb')
+
+    # check BCL1 marker at start of partition    
+    fin.seek(part_startoffset[part_nr] + in_offset, 0)
+    FourCC = fin.read(4)
+    if FourCC != b'BCL1':
+        print("\033[91mBCL1 marker not found, exit\033[0m")
+        sys.exit(1)
+
+    # skip 2 bytes
+    bytes2skip = fin.read(2)
+    # check compression algo
+    Algorithm = struct.unpack('>H', fin.read(2))[0]
+    if (Algorithm != 0x09) & (Algorithm != 0x0B) & (Algorithm != 0x0C):
+        print("\033[91mCompression algo %0X is not supported\033[0m" % Algorithm)
+        sys.exit(1)
+
+    in_offset = in_offset + 0x10 #skip BCL1 header
+    fin.seek(part_startoffset[part_nr] + in_offset, 0)
+
+    out = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
+
+    # LZ77 compress
+    if Algorithm == 0x09:
+        # Get marker symbol from input stream
+        marker = struct.unpack('B', fin.read(1))[0]
+        #print("LZ marker = 0x%0X" % marker)
+
+        print("Not supported now")
+        fin.close()
+        exit(0)
+
+    # LZMA compress
+    if Algorithm == 0x0B:
+        fin.close()
+        fin = open(in2_file, 'rb')
+        dataread = fin.read()
+        fin.close()
+        
+        compress = lzma.compress(dataread, lzma.FORMAT_ALONE)
+        fout = open(out, 'w+b')
+        fout.write(struct.pack('>I', 0x42434C31)) # write BCL1
+        fout.write(bytes2skip)
+        fout.write(struct.pack('>H', Algorithm)) # write Algorithm
+        fout.write(struct.pack('>I', len(dataread))) # write unpacked size
+        fout.write(struct.pack('>I', len(compress))) # write packed size
+        fout.write(compress) # write data
+        fout.close()
+
+    # ZLIB compress
+    if Algorithm == 0x0C:
+        fin.close()
+        fin = open(in2_file, 'rb')
+        dataread = fin.read()
+        fin.close()
+        
+        compress = zlib.compress(dataread)
+        fout = open(out, 'w+b')
+        fout.write(struct.pack('>I', 0x42434C31)) # write BCL1
+        fout.write(bytes2skip)
+        fout.write(struct.pack('>H', Algorithm)) # write Algorithm
+        fout.write(struct.pack('>I', len(dataread))) # write unpacked size
+        fout.write(struct.pack('>I', len(compress))) # write packed size
+        fout.write(compress) # write data
+        fout.close()
+
 
 
 
@@ -528,6 +717,7 @@ def BCL1_uncompress(in_offset):
         decompress = zlib.decompress(dataread)
         fout.write(decompress)
         fout.close()
+
 
 
 # use for lzma exception workaround
@@ -970,8 +1160,8 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                 #print('newsize %d' % newsize)
                 #print('sizediff %d' % sizediff)
                 #print('write newsize to 0x%08X' % (NVTPACK_FW_HDR2_size + (part_nr * 12) + 4))
-                fin.write(struct.pack('<I', newsize)) # заменим part_size новым с выравниванием до 4 байт
-                part_size[part_nr] = newsize # корректируем данные в нашей переменной
+                fin.write(struct.pack('<I', newsize - newalignsize)) # заменим part_size новым без учёта выравнивания до 4 байт
+                part_size[part_nr] = newsize - newalignsize # корректируем данные в нашей переменной
                 fin.seek(4, 1) #пропустим part_id
                 
                 # пересчитаем part_startoffset для партиций идущих следом за заменяемой
@@ -987,7 +1177,7 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                 fin.seek(part_startoffset[part_nr] + is_replace_offset, 0)
                 fin.write(replacedata)
                 
-                # добавим сколько надо 00 для выравнивания до 4 байт
+                # добавим сколько надо 00 для выравнивания до 4 байт адреса начала следующей партиции
                 for b in range(newalignsize):
                     fin.write(struct.pack('B', 0))
                 
@@ -1304,7 +1494,7 @@ def main():
                 else:
                     print('Compress \033[93m%s\033[0m to partition ID %i at 0x%08X' % (in2_file, part_id[part_nr], part_startoffset[part_nr]))
 
-            compress(part_nr, is_compress_offset, in2_file)
+            compress(part_nr, in2_file)
 
         else:
             print('\033[91mCould not find partiton with ID %i\033[0m' % is_compress)
