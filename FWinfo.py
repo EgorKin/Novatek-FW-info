@@ -15,6 +15,7 @@
 # V4.0 - add -c command: compress partition by ID and merge to firmware file
 # V4.1 - support change partition size for -c command
 # V4.2 - add support CKSM<--BCL1 and BCL1 partitions for -c command (except LZ compression)
+# V4.3 - add support SPARSE partitions for -u and -c command
 
 
 import os, struct, sys, argparse, array
@@ -22,6 +23,129 @@ from datetime import datetime
 import zlib
 import lzma
 import subprocess
+#from bitarray import bitarray
+
+
+class LZ77Compressor:
+    """
+    A simplified implementation of the LZ77 Compression Algorithm
+    """
+    MAX_WINDOW_SIZE = 400
+
+    def __init__(self, window_size=20):
+        self.window_size = min(window_size, self.MAX_WINDOW_SIZE) 
+        self.lookahead_buffer_size = 15 # length of match is at most 4 bits
+
+    def compress(self, input_file_path, output_file_path=None, verbose=False):
+        """
+        Given the path of an input file, its content is compressed by applying a simple 
+        LZ77 compression algorithm. 
+        The compressed format is:
+        0 bit followed by 8 bits (1 byte character) when there are no previous matches
+            within window
+        1 bit followed by 12 bits pointer (distance to the start of the match from the 
+            current position) and 4 bits (length of the match)
+
+        If a path to the output file is provided, the compressed data is written into 
+        a binary file. Otherwise, it is returned as a bitarray
+        if verbose is enabled, the compression description is printed to standard output
+        """
+        data = None
+        i = 0
+        #output_buffer = bitarray(endian='big')
+        output_buffer = []
+
+        # read the input file 
+        try:
+            with open(input_file_path, 'rb') as input_file:
+                data = input_file.read()
+        except IOError:
+            print('Could not open input file ...')
+            raise
+
+        while i < len(data):
+            #print(i)
+
+            match = self.findLongestMatch(data, i)
+
+            if match: 
+                # Add 1 bit flag, followed by 12 bit for distance, and 4 bit for the length
+                # of the match 
+                (bestMatchDistance, bestMatchLength) = match
+
+                #output_buffer.append(True)
+                #output_buffer.frombytes(bytes([bestMatchDistance >> 4]))
+                #output_buffer.frombytes(bytes([((bestMatchDistance & 0xf) << 4) | bestMatchLength]))
+                output_buffer.append(0x80 | bestMatchDistance)
+                output_buffer.append(bestMatchLength)
+
+                if verbose:
+                    print("<1, %i, %i>" % (bestMatchDistance, bestMatchLength), end='')
+
+                i += bestMatchLength
+
+            else:
+                # No useful match was found. Add 0 bit flag, followed by 8 bit for the character
+                #output_buffer.append(False)
+                #output_buffer.frombytes(bytes([data[i]]))
+                output_buffer.append(bytes([data[i]]))
+
+                if verbose:
+                    print("<0, %s>" % data[i], end='')
+
+                i += 1
+
+        # fill the buffer with zeros if the number of bits is not a multiple of 8		
+        #output_buffer.fill()
+
+        # write the compressed data into a binary file if a path is provided
+        if output_file_path:
+            try:
+                with open(output_file_path, 'wb') as output_file:
+                    #output_file.write(output_buffer.tobytes())
+                    output_file.write(output_buffer)
+                    print("File was compressed successfully and saved to output path ...")
+                    return None
+            except IOError:
+                print('Could not write to output file path. Please check if the path is correct ...')
+                raise
+
+        # an output file path was not provided, return the compressed data
+        return output_buffer
+
+
+
+    def findLongestMatch(self, data, current_position):
+        """ 
+        Finds the longest match to a substring starting at the current_position 
+        in the lookahead buffer from the history window
+        """
+        end_of_buffer = min(current_position + self.lookahead_buffer_size, len(data) + 1)
+
+        best_match_distance = -1
+        best_match_length = -1
+
+        # Optimization: Only consider substrings of length 2 and greater, and just 
+        # output any substring of length 1 (8 bits uncompressed is better than 13 bits
+        # for the flag, distance, and length)
+        for j in range(current_position + 2, end_of_buffer):
+
+            start_index = max(0, current_position - self.window_size)
+            substring = data[current_position:j]
+
+            for i in range(start_index, current_position):
+                repetitions = len(substring) // (current_position - i)
+                last = len(substring) % (current_position - i)
+                matched_string = data[i:current_position] * repetitions + data[i:i+last]
+                if matched_string == substring and len(substring) > best_match_length:
+                    best_match_distance = current_position - i 
+                    best_match_length = len(substring)
+
+        if best_match_distance > 0 and best_match_length > 0:
+            return (best_match_distance, best_match_length)
+        return None
+    
+
 
 
 in_file = ''
@@ -409,6 +533,58 @@ def compress_CKSM_BCL(part_nr, in2_file):
 
 
 
+def compress_CKSM_SPARSE(part_nr, in2_file):
+    global in_file
+
+    fin = open(in_file, 'rb')
+    fin.seek(part_startoffset[part_nr], 0)
+    FourCC = fin.read(4)
+
+    if FourCC != b'CKSM':
+        print('\033[91mNot CKSM partition, exit\033[0m')
+        exit(0)
+
+    # skip CKSM header
+    fin.seek(part_startoffset[part_nr] + 0x40, 0)
+
+    FourCC = fin.read(4)
+    if struct.unpack('>I', FourCC)[0] != 0x3AFF26ED:
+        print('\033[91mNot SPARSE into CKSM partition, exit\033[0m')
+        exit(0)
+
+    # для SPARSE на вход должна подаваться папка партиции, а не файл
+    if not os.path.exists(in2_file):
+        print('\033[91m%s folder does not found, exit\033[0m' % in2_file)
+        exit(0)
+
+    # run compilation dir to SPARSE EXT4 cmd
+    os.popen('make_ext4fs -s -l ' + str(part_size[part_nr] - 0x40) + ' ' + 'tempSPARSEfile ' + in2_file).read()
+
+    # umount
+    subprocess.run('umount -d -f ' + in2_file, shell=True)
+
+    # удалим всю директорию, все равно после umount в ней пусто
+    # delete tempfile & tempfile.ext4
+    os.system('rm -rf ' + in2_file)
+
+
+    # hide output print
+    global is_silent
+    is_silent = 1
+
+    # replace partition
+    partition_replace(part_id[part_nr], 0x40, 'tempSPARSEfile')
+
+    # delete tempSPARSEfile
+    subprocess.run('rm tempSPARSEfile', shell=True)
+
+
+    # fix CRC
+    is_silent = 0
+    fixCRC(part_id[part_nr])
+
+
+
 def compress_BCL(part_nr, in2_file):
     global in_file
 
@@ -470,6 +646,12 @@ def compress(part_nr, in2_file):
             fin.close()
             compress_CKSM_BCL(part_nr, in2_file)
             return
+
+        # CKSM<--SPARSE EXT4 image
+        if struct.unpack('>I', FourCC)[0] == 0x3AFF26ED:
+            fin.close()
+            compress_CKSM_SPARSE(part_nr, in2_file)
+            return
     else:
         # BCL1
         if FourCC == b'BCL1':
@@ -509,13 +691,28 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
     # LZ77 compress
     if Algorithm == 0x09:
-        # Get marker symbol from input stream
-        marker = struct.unpack('B', fin.read(1))[0]
+        # Get marker symbol from original partition
+        #marker = struct.unpack('B', fin.read(1))[0]
         #print("LZ marker = 0x%0X" % marker)
-
-        print("Not supported now")
         fin.close()
-        exit(0)
+        
+        l = LZ77Compressor()
+        try:
+            compress = l.compress(in2_file)
+        except:
+            print("\033[91mCompression to LZ BCL1 failed\033[0m")
+            exit(1)
+
+        #print("Compression to LZ BCL1 successfull")
+        fout = open(out, 'w+b')
+        fout.write(struct.pack('>I', 0x42434C31)) # write BCL1
+        fout.write(bytes2skip)
+        fout.write(struct.pack('>H', Algorithm)) # write Algorithm
+        fout.write(struct.pack('>I', os.path.getsize(in2_file))) # write unpacked size
+        fout.write(struct.pack('>I', len(compress))) # write packed size
+        fout.write(compress) # write data
+        fout.close()
+        return
 
     # LZMA compress
     if Algorithm == 0x0B:
@@ -533,6 +730,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         fout.write(struct.pack('>I', len(compress))) # write packed size
         fout.write(compress) # write data
         fout.close()
+        return
 
     # ZLIB compress
     if Algorithm == 0x0C:
@@ -550,7 +748,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         fout.write(struct.pack('>I', len(compress))) # write packed size
         fout.write(compress) # write data
         fout.close()
-
+        return
 
 
 
@@ -588,8 +786,37 @@ def uncompress(in_offset, out_filename, size):
         os.system('rm -rf ' + './' + out_filename + '/' + 'tempfile')
         return
 
-    print("\033[91mBCL1 or UBI# markers not found, exit\033[0m")
+    if struct.unpack('>I', FourCC)[0] == 0x3AFF26ED:
+        #create dir with similar name as for other parttition types
+        os.system('rm -rf ' + out_filename)
+        os.system('mkdir ' + out_filename)
+
+        #extract SPARSE EXT4 partition to tempfile
+        fin.seek(in_offset, 0)
+        finread = fin.read(size)
+        fin.close()
+        fpartout = open('./' + out_filename + '/' + 'tempfile', 'w+b')
+        fpartout.write(finread)
+        fpartout.close()
+
+        # convert SPARSE to ext4
+        subprocess.run('simg2img ' + out_filename + '/tempfile ' + out_filename + '/tempfile.ext4', shell=True)
+
+        # mount ext4 to folder
+        os.system('mount ' + out_filename + '/tempfile.ext4 ' + out_filename)
+
+        # файлов нет пока не выполнить umount, будут удалены при сборке обратно в SPARSE и замене партиции в FW
+        # delete tempfile
+        #os.system('rm -rf ' + './' + out_filename + '/' + 'tempfile')
+        
+        # delete tempfile.ext4
+        #os.system('rm -rf ' + './' + out_filename + '/' + 'tempfile.ext4')
+
+        return
+
+    print("\033[91mBCL1 or UBI# or SPARSE markers not found, exit\033[0m")
     fin.close()
+
 
 
 def BCL1_uncompress(in_offset):
@@ -1409,13 +1636,14 @@ def main():
             part_id.append(struct.unpack('<I', fin.read(4))[0])
             part_endoffset.append(part_startoffset[a] + part_size[a])
 
-
         # read each partition info
         for a in range(partitions_count):
             GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a])
 
-        # looking into dtb partition for partition id - name - filename info
-        SearchPartNamesInDTB(partitions_count)
+        # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
+        if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
+            # looking into dtb partition for partition id - name - filename info
+            SearchPartNamesInDTB(partitions_count)
         
         
         
@@ -1471,7 +1699,7 @@ def main():
                     is_uncompress_offset = 0 # if start offset not defined set it to 0
 
             uncompress(part_startoffset[part_nr] + is_uncompress_offset, out_file, part_size[part_nr] - is_uncompress_offset)
-            
+
         else:
             print('\033[91mCould not find partiton with ID %i\033[0m' % is_uncompress)
         fin.close()
