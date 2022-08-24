@@ -14,8 +14,10 @@
 # V3.9 - extract files from UBI via -u command using ubireader
 # V4.0 - add -c command: compress partition by ID and merge to firmware file
 # V4.1 - support change partition size for -c command
-# V4.2 - add support CKSM<--BCL1 and BCL1 partitions for -c command (except LZ compression)
+# V4.2 - add support CKSM<--BCL1 and BCL1 partitions for -c command
 # V4.3 - add support SPARSE partitions for -u and -c command
+# V4.4 - speed up LZ77 uncompress
+# V4.5 - add LZ compression for -c command; now support -u & -c for old firmware format; another temp folders struct for SPARSE partitions
 
 
 import os, struct, sys, argparse, array
@@ -23,128 +25,6 @@ from datetime import datetime
 import zlib
 import lzma
 import subprocess
-#from bitarray import bitarray
-
-
-class LZ77Compressor:
-    """
-    A simplified implementation of the LZ77 Compression Algorithm
-    """
-    MAX_WINDOW_SIZE = 400
-
-    def __init__(self, window_size=20):
-        self.window_size = min(window_size, self.MAX_WINDOW_SIZE) 
-        self.lookahead_buffer_size = 15 # length of match is at most 4 bits
-
-    def compress(self, input_file_path, output_file_path=None, verbose=False):
-        """
-        Given the path of an input file, its content is compressed by applying a simple 
-        LZ77 compression algorithm. 
-        The compressed format is:
-        0 bit followed by 8 bits (1 byte character) when there are no previous matches
-            within window
-        1 bit followed by 12 bits pointer (distance to the start of the match from the 
-            current position) and 4 bits (length of the match)
-
-        If a path to the output file is provided, the compressed data is written into 
-        a binary file. Otherwise, it is returned as a bitarray
-        if verbose is enabled, the compression description is printed to standard output
-        """
-        data = None
-        i = 0
-        #output_buffer = bitarray(endian='big')
-        output_buffer = []
-
-        # read the input file 
-        try:
-            with open(input_file_path, 'rb') as input_file:
-                data = input_file.read()
-        except IOError:
-            print('Could not open input file ...')
-            raise
-
-        while i < len(data):
-            #print(i)
-
-            match = self.findLongestMatch(data, i)
-
-            if match: 
-                # Add 1 bit flag, followed by 12 bit for distance, and 4 bit for the length
-                # of the match 
-                (bestMatchDistance, bestMatchLength) = match
-
-                #output_buffer.append(True)
-                #output_buffer.frombytes(bytes([bestMatchDistance >> 4]))
-                #output_buffer.frombytes(bytes([((bestMatchDistance & 0xf) << 4) | bestMatchLength]))
-                output_buffer.append(0x80 | bestMatchDistance)
-                output_buffer.append(bestMatchLength)
-
-                if verbose:
-                    print("<1, %i, %i>" % (bestMatchDistance, bestMatchLength), end='')
-
-                i += bestMatchLength
-
-            else:
-                # No useful match was found. Add 0 bit flag, followed by 8 bit for the character
-                #output_buffer.append(False)
-                #output_buffer.frombytes(bytes([data[i]]))
-                output_buffer.append(bytes([data[i]]))
-
-                if verbose:
-                    print("<0, %s>" % data[i], end='')
-
-                i += 1
-
-        # fill the buffer with zeros if the number of bits is not a multiple of 8		
-        #output_buffer.fill()
-
-        # write the compressed data into a binary file if a path is provided
-        if output_file_path:
-            try:
-                with open(output_file_path, 'wb') as output_file:
-                    #output_file.write(output_buffer.tobytes())
-                    output_file.write(output_buffer)
-                    print("File was compressed successfully and saved to output path ...")
-                    return None
-            except IOError:
-                print('Could not write to output file path. Please check if the path is correct ...')
-                raise
-
-        # an output file path was not provided, return the compressed data
-        return output_buffer
-
-
-
-    def findLongestMatch(self, data, current_position):
-        """ 
-        Finds the longest match to a substring starting at the current_position 
-        in the lookahead buffer from the history window
-        """
-        end_of_buffer = min(current_position + self.lookahead_buffer_size, len(data) + 1)
-
-        best_match_distance = -1
-        best_match_length = -1
-
-        # Optimization: Only consider substrings of length 2 and greater, and just 
-        # output any substring of length 1 (8 bits uncompressed is better than 13 bits
-        # for the flag, distance, and length)
-        for j in range(current_position + 2, end_of_buffer):
-
-            start_index = max(0, current_position - self.window_size)
-            substring = data[current_position:j]
-
-            for i in range(start_index, current_position):
-                repetitions = len(substring) // (current_position - i)
-                last = len(substring) % (current_position - i)
-                matched_string = data[i:current_position] * repetitions + data[i:i+last]
-                if matched_string == substring and len(substring) > best_match_length:
-                    best_match_distance = current_position - i 
-                    best_match_length = len(substring)
-
-        if best_match_distance > 0 and best_match_length > 0:
-            return (best_match_distance, best_match_length)
-        return None
-    
 
 
 
@@ -527,6 +407,9 @@ def compress_CKSM_BCL(part_nr, in2_file):
     # replace partition
     partition_replace(part_id[part_nr], 0x40, comp_filename)
 
+    # delete comp_partitionID file
+    subprocess.run('rm -rf ' + comp_filename, shell=True)
+    
     # fix CRC
     is_silent = 0
     fixCRC(part_id[part_nr])
@@ -558,14 +441,10 @@ def compress_CKSM_SPARSE(part_nr, in2_file):
         exit(0)
 
     # run compilation dir to SPARSE EXT4 cmd
-    os.popen('make_ext4fs -s -l ' + str(part_size[part_nr] - 0x40) + ' ' + 'tempSPARSEfile ' + in2_file).read()
+    os.popen('make_ext4fs -s -l ' + str(os.path.getsize(in2_file + '/tempfile.ext4')) + ' ' + in2_file + '/tempSPARSEfile ' + in2_file + '/mount').read()
 
     # umount
-    subprocess.run('umount -d -f ' + in2_file, shell=True)
-
-    # удалим всю директорию, все равно после umount в ней пусто
-    # delete tempfile & tempfile.ext4
-    os.system('rm -rf ' + in2_file)
+    subprocess.run('umount -d -f ' + in2_file + '/mount', shell=True)
 
 
     # hide output print
@@ -573,11 +452,11 @@ def compress_CKSM_SPARSE(part_nr, in2_file):
     is_silent = 1
 
     # replace partition
-    partition_replace(part_id[part_nr], 0x40, 'tempSPARSEfile')
+    partition_replace(part_id[part_nr], 0x40, in2_file + '/tempSPARSEfile')
 
-    # delete tempSPARSEfile
-    subprocess.run('rm tempSPARSEfile', shell=True)
-
+    # удалим всю директорию, все равно после umount в ней пусто
+    # delete tempfile & tempfile.ext4 & tempSPARSEfile
+    os.system('rm -rf ' + in2_file)
 
     # fix CRC
     is_silent = 0
@@ -617,6 +496,9 @@ def compress_BCL(part_nr, in2_file):
     # replace partition
     partition_replace(part_id[part_nr], 0, comp_filename)
 
+    # delete comp_partitionID file
+    subprocess.run('rm -rf ' + comp_filename, shell=True)
+    
     # fix CRC
     is_silent = 0
     fixCRC(part_id[part_nr])
@@ -684,33 +566,240 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         print("\033[91mCompression algo %0X is not supported\033[0m" % Algorithm)
         sys.exit(1)
 
-    in_offset = in_offset + 0x10 #skip BCL1 header
-    fin.seek(part_startoffset[part_nr] + in_offset, 0)
 
     out = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
 
     # LZ77 compress
     if Algorithm == 0x09:
         # Get marker symbol from original partition
+        #in_offset = in_offset + 0x10 #skip BCL1 header
+        #fin.seek(part_startoffset[part_nr] + in_offset, 0)
         #marker = struct.unpack('B', fin.read(1))[0]
         #print("LZ marker = 0x%0X" % marker)
         fin.close()
-        
-        l = LZ77Compressor()
-        try:
-            compress = l.compress(in2_file)
-        except:
-            print("\033[91mCompression to LZ BCL1 failed\033[0m")
-            exit(1)
+        fin = open(in2_file, 'rb')
+        dataread = fin.read()
+        fin.close()
 
-        #print("Compression to LZ BCL1 successfull")
+        # размер в байтах сжимаемых данных
+        insize = len(dataread)
+
+        # temporary buffer (internal working buffer), which must be able to hold (insize+65536) unsigned integers
+        work = []
+        for a in range(65536 + insize):
+            work.append(0x00000000)
+
+        # Assign arrays to the working area
+        #lastindex = work;
+        #jumptable = &work[ 65536 ];
+
+        # Build a "jump table"
+        i = 0
+        for i in range(65536):
+            work[ i ] = 0xffffffff
+
+        for i in range(insize-1):
+            symbols = ((dataread[i]) << 8) | (dataread[i+1])
+            index = work[ symbols ]
+            work[ symbols ] = i
+            work[ 65536 + i ] = index
+
+        work[ 65536 + insize-1 ] = 0xffffffff
+
+
+        # найдем наименее встречающийся байт среди сжимаемых данных
+        # он будет маркером т.к. маркер кодируется 2 байтами - чем меньше таких символов тем лучше сжатие
+        histogram = []
+        for a in range(256):
+            histogram.append(0)
+        for a in range(len(dataread)):
+            histogram[int(dataread[a])] += 1
+        marker = histogram.index(min(histogram))
+        #print("new marker = 0x%02X" % marker)
+
+
         fout = open(out, 'w+b')
         fout.write(struct.pack('>I', 0x42434C31)) # write BCL1
         fout.write(bytes2skip)
         fout.write(struct.pack('>H', Algorithm)) # write Algorithm
         fout.write(struct.pack('>I', os.path.getsize(in2_file))) # write unpacked size
-        fout.write(struct.pack('>I', len(compress))) # write packed size
-        fout.write(compress) # write data
+        fout.write(struct.pack('>I', 0)) # write packed size, unknown now - write after compression
+        
+        # Lower values give faster compression, while higher values gives better compression.
+        LZ_MAX_OFFSET = 0x7F7F#265000
+
+        outputbuf = bytearray()
+        
+        # Remember the marker symbol for the decoder
+        outputbuf.append(marker)
+        #print("0x%02X" % marker)
+
+        # Start of compression
+        inpos = 0
+        outpos = 1
+
+        # Main compression loop
+        bytesleft = insize - 1
+        while bytesleft > 3:
+            # Get pointer to current position
+            #ptr1 = &in[ inpos ]
+
+            # Search history window for maximum length string match
+            bestlength = 3
+            bestoffset = 0
+            index = work[ 65536 + inpos ]
+
+            while (index != 0xffffffff) & ((inpos - index) < LZ_MAX_OFFSET):
+                # Get pointer to candidate string
+                ##ptr2 = &ptr1[ -(int)offset ]
+                #ptr2 = &in[ index ];
+
+                # Quickly determine if this is a candidate (for speed)
+                try:
+                    if dataread[ index + bestlength ] == dataread[ inpos + bestlength ]:
+                        # Determine maximum length for this offset
+                        offset = inpos - index
+                        if bytesleft < offset:
+                            maxlength = bytesleft
+                        else:
+                            maxlength = offset
+                        # Count maximum length match at this offset
+                        ##length = _LZ_StringCompare(dataread[ inpos ], dataread[ inpos - offset ], 0, maxlength)
+                        #length = _LZ_StringCompare( ptr1, ptr2, 2, maxlength );
+                        try:
+                            length = 2
+                            while (length < maxlength):
+                                if (dataread[ inpos + length ] == dataread[ index + length]):
+                                    length += 1
+                                else:
+                                    break
+                        except IndexError:
+                            print("OOPS: inpos=%d, length=%d, maxlength=%d, index=%d" %(inpos, length, maxlength, index))
+                        #static unsigned int _LZ_StringCompare( unsigned char * str1, unsigned char * str2, unsigned int minlen, unsigned int maxlen )
+                        #{
+                        #    unsigned int len;
+                        #
+                        #    for( len = minlen; (len < maxlen) && (str1[len] == str2[len]); ++ len );
+                        #
+                        #    return len;
+                        #}
+    
+                        # Better match than any previous match?
+                        if length > bestlength:
+                            bestlength = length
+                            bestoffset = offset
+                except IndexError:
+                    print("OOPS: inpos=%d, bestlength=%d, index=%d" %(inpos, bestlength, index))
+
+                # Get next possible index from jump table
+                index = work[ 65536 + index ]
+
+
+            # Was there a good enough match?
+            if( (bestlength >= 8) |
+                ((bestlength == 4) & (bestoffset <= 0x0000007f)) |
+                ((bestlength == 5) & (bestoffset <= 0x00003fff)) |
+                ((bestlength == 6) & (bestoffset <= 0x001fffff)) |
+                ((bestlength == 7) & (bestoffset <= 0x0fffffff)) ):
+                    outputbuf.append(marker)
+                    #print("0x%02X" % marker)
+                    outpos += 1
+                    
+                    #print("length = %d" % bestlength)
+                    ##outpos += _LZ_WriteVarSize( bestlength, &out[ outpos ] )
+                    buf = 0
+                    y = bestlength >> 3;
+                    num_bytes = 5
+                    while num_bytes >= 2:
+                        if y & 0xfe000000 != 0:
+                            break
+                        y <<= 7
+                        num_bytes -= 1
+                    # Write all bytes, seven bits in each, with 8:th bit set for all
+                    # but the last byte.
+                    i = num_bytes-1
+                    while i >= 0:
+                        b = (bestlength >> (i*7)) & 0x0000007f
+                        if i > 0:
+                            b |= 0x00000080
+                        buf = (buf<<8) | b;
+                        i -= 1
+                    # Return number of bytes written
+                    outpos += num_bytes
+                    #print("num_bytes = %d" % num_bytes)
+                    #print("buf = %d" % buf)
+                    for a in range(num_bytes):
+                        outputbuf.append((buf>>(8*(num_bytes - 1)))&0xFF)
+                        num_bytes -= 1
+                    
+                    #print("offset = %d" % bestoffset)
+                    ##outpos += _LZ_WriteVarSize( bestoffset, &out[ outpos ] )
+                    buf = 0
+                    y = bestoffset >> 3;
+                    num_bytes = 5
+                    while num_bytes >= 2:
+                        if y & 0xfe000000 != 0:
+                            break
+                        y <<= 7
+                        num_bytes -= 1
+                    # Write all bytes, seven bits in each, with 8:th bit set for all
+                    # but the last byte.
+                    i = num_bytes-1
+                    while i >= 0:
+                        b = (bestoffset >> (i*7)) & 0x0000007f
+                        if i > 0:
+                            b |= 0x00000080
+                        buf = (buf<<8) | b;
+                        i -= 1
+                    # Return number of bytes written
+                    outpos += num_bytes
+                    #print("num_bytes = %d" % num_bytes)
+                    #print("buf = %d" % buf)
+                    for a in range(num_bytes):
+                        outputbuf.append((buf>>(8*(num_bytes - 1)))&0xFF)
+                        num_bytes -= 1
+                    
+                    inpos += bestlength
+                    bytesleft -= bestlength
+            else:
+                # Output single byte (or two bytes if marker byte)
+                symbol = dataread[ inpos ]
+                inpos += 1
+                outputbuf.append(symbol)
+                #print("0x%02X" % symbol)
+                outpos += 1
+                if symbol == marker:
+                    outputbuf.append(0)
+                    #print("0x00")
+                    outpos += 1
+                bytesleft -= 1
+
+            # просто вывод прогресса работы
+            #if (insize - (insize-bytesleft)) % 1000 == 0:
+            #    print("total = %d" %(insize - (insize-bytesleft)))
+
+        # Dump remaining bytes, if any
+        while inpos < insize:
+            if dataread[ inpos ] == marker:
+                outputbuf.append(marker)
+                #print("0x%02X" % marker)
+                outpos += 1
+                outputbuf.append(0)
+                #print("0x00")
+                outpos += 1
+            else:
+                outputbuf.append(dataread[ inpos ])
+                #print("0x%02X" % dataread[ inpos ])
+                outpos += 1
+            inpos += 1
+
+        fout.write(outputbuf)
+        fout.close()
+        
+        #print("Compression to LZ BCL1 successfull")
+        fout = open(out, 'r+b')
+        fout.seek(12)
+        fout.write(struct.pack('>I', outpos)) # write packed size
         fout.close()
         return
 
@@ -786,16 +875,18 @@ def uncompress(in_offset, out_filename, size):
         os.system('rm -rf ' + './' + out_filename + '/' + 'tempfile')
         return
 
+    # SPARSE EXT4
     if struct.unpack('>I', FourCC)[0] == 0x3AFF26ED:
         #create dir with similar name as for other parttition types
         os.system('rm -rf ' + out_filename)
         os.system('mkdir ' + out_filename)
+        os.system('mkdir ' + out_filename + '/mount') # subdir for mounting ext4
 
         #extract SPARSE EXT4 partition to tempfile
         fin.seek(in_offset, 0)
         finread = fin.read(size)
         fin.close()
-        fpartout = open('./' + out_filename + '/' + 'tempfile', 'w+b')
+        fpartout = open('./' + out_filename + '/tempfile', 'w+b')
         fpartout.write(finread)
         fpartout.close()
 
@@ -803,7 +894,7 @@ def uncompress(in_offset, out_filename, size):
         subprocess.run('simg2img ' + out_filename + '/tempfile ' + out_filename + '/tempfile.ext4', shell=True)
 
         # mount ext4 to folder
-        os.system('mount ' + out_filename + '/tempfile.ext4 ' + out_filename)
+        os.system('mount ' + out_filename + '/tempfile.ext4 ' + out_filename + '/mount')
 
         # файлов нет пока не выполнить umount, будут удалены при сборке обратно в SPARSE и замене партиции в FW
         # delete tempfile
@@ -854,8 +945,11 @@ def BCL1_uncompress(in_offset):
         # Get marker symbol from input stream
         marker = struct.unpack('B', fin.read(1))[0]
         #print("LZ marker = 0x%0X" % marker)
+
+        #startT = datetime.now()
         inpos = 1
-    
+        outputbuf = bytearray()
+        
         # Main decompression loop
         outpos = 0;
         while((inpos < insize) & (outpos < outsize)):
@@ -867,7 +961,8 @@ def BCL1_uncompress(in_offset):
                 readbyte = struct.unpack('B', fin.read(1))[0]
                 if readbyte == 0:
                     # It was a single occurrence of the marker byte
-                    fout.write(struct.pack('B', marker))
+                    ##fout.write(struct.pack('B', marker))
+                    outputbuf.append(marker)
                     outpos += 1
                     inpos += 1
                 else:
@@ -914,19 +1009,25 @@ def BCL1_uncompress(in_offset):
                     # Copy corresponding data from history window
                     #out[ outpos ] = out[ outpos - offset ];
                     for i in range(length):
-                        fout.seek(outpos - offset, 0)
-                        out = struct.unpack('B', fout.read(1))[0]
-                        fout.seek(outpos, 0)
-                        fout.write(struct.pack('B', out))
+                        ##fout.seek(outpos - offset, 0)
+                        ##out = struct.unpack('B', fout.read(1))[0]
+                        ##fout.seek(outpos, 0)
+                        ##fout.write(struct.pack('B', out))
+                        outputbuf.append(outputbuf[outpos - offset])
                         outpos += 1
             else:
                 # No marker, plain copy
-                fout.write(struct.pack('B', symbol))
+                ##fout.write(struct.pack('B', symbol))
+                outputbuf.append(symbol)
                 outpos += 1
 
+        fout.write(outputbuf)
         fin.close()
         fout.close()
-    
+        #endT = datetime.now()
+        #print("elapsed: %s" % str(endT - startT))
+
+
     # LZMA uncompress
     if Algorithm == 0x0B:
         dataread = fin.read(insize)
@@ -935,6 +1036,7 @@ def BCL1_uncompress(in_offset):
         decompress = decompress_lzma(dataread)[:outsize]
         fout.write(decompress)
         fout.close()
+
 
     # ZLIB uncompress
     if Algorithm == 0x0C:
@@ -1368,7 +1470,7 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                     #print('enddata start at 0x%08X' % part_startoffset[part_nr + 1])
                     enddata = fin.read() # считали все партиции после заменяемой партиции
                 fin.close()
-                
+
                 # заменим данные в таблице партиций: [part_startoffset, part_size, part_id]
                 fin = open(in_file, 'r+b') # именно r+b для ЗАМЕНЫ данных
                 fin.seek(NVTPACK_FW_HDR2_size + (part_nr * 12), 0)
@@ -1381,7 +1483,10 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                 # бывают прошивки где между part_startoffset+part_size и началом следующей партиции есть место (больше чем требуется для выравнивания по 4 байта), неиспользуемое но оно есть
                 # поэтому вычитаем не part_size[part_nr] + oldalignsize
                 # а (part_startoffset[part_nr + 1] - part_startoffset[part_nr]) - полный размер партиции = полезный размер + выравнивание до 4 байт + неиспользуемые данные 00 до след. партиции
-                sizediff = newsize - (part_startoffset[part_nr + 1] - part_startoffset[part_nr]) # разница в размерах - может быть отрицательной
+                if part_nr + 1 < partitions_count:
+                    sizediff = newsize - (part_startoffset[part_nr + 1] - part_startoffset[part_nr]) # разница в размерах - может быть отрицательной
+                else:
+                    sizediff = newsize - part_size[part_nr] # для последней партиции если только брать её размер
 
                 #print('new alignsize %d' % newalignsize)
                 #print('newsize %d' % newsize)
@@ -1390,7 +1495,7 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                 fin.write(struct.pack('<I', newsize - newalignsize)) # заменим part_size новым без учёта выравнивания до 4 байт
                 part_size[part_nr] = newsize - newalignsize # корректируем данные в нашей переменной
                 fin.seek(4, 1) #пропустим part_id
-                
+
                 # пересчитаем part_startoffset для партиций идущих следом за заменяемой
                 a = part_nr + 1
                 while(a < partitions_count):
@@ -1403,18 +1508,18 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                 #print('replace part at 0x%08X' % (part_startoffset[part_nr] + is_replace_offset))
                 fin.seek(part_startoffset[part_nr] + is_replace_offset, 0)
                 fin.write(replacedata)
-                
+
                 # добавим сколько надо 00 для выравнивания до 4 байт адреса начала следующей партиции
                 for b in range(newalignsize):
                     fin.write(struct.pack('B', 0))
-                
+
                 # если заменяемая партиция не последняя то
                 if part_nr + 1 < partitions_count:
                     # допишем оставшиеся партиции
                     fin.write(enddata)
                 fin.truncate() # изменим размер файла
                 fin.close()
-                
+
                 filesize = os.path.getsize(in_file)
                 # пересчитаем TotalSize в NVTPACK_FW_HDR2
                 fin = open(in_file, 'r+b') # именно r+b для ЗАМЕНЫ данных
@@ -1426,8 +1531,147 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                 if part_type[part_nr][:13] == '\033[93mCKSM\033[0m':
                     fin.seek(part_startoffset[part_nr] + 0x14, 0)
                     fin.write(struct.pack('<I', newsize - is_replace_offset))
-                    
+
                 fin.close()
+                return
+
+            # для более старой версии прошивок
+            if FW_HDR == 1:
+                fin = open(in_file, 'rb')
+                # если заменяемая партиция не последняя то
+                if part_nr + 1 < partitions_count:
+                    fin.seek(part_startoffset[part_nr + 1], 0)
+                    #print('enddata start at 0x%08X' % part_startoffset[part_nr + 1])
+                    enddata = fin.read() # считали все партиции после заменяемой партиции
+                fin.close()
+
+                # если это не просто BCL1 партиция идущая вне таблицы партиций
+                if part_id[part_nr] != 0:
+                    # заменим данные в таблице партиций: [part_startoffset, part_size, part_id]
+                    fin = open(in_file, 'r+b') # именно r+b для ЗАМЕНЫ данных
+                    fin.seek(part_size[0] + 28 + ((part_nr - 1) * 12), 0)
+                    fin.seek(4, 1) # part_startoffset не поменяется
+                    # высчитаем сколько нужно 00 для выравнивания новой партиции до кратности 4 байт
+                    newalignsize = (4 - ((len(replacedata) + is_replace_offset)%4))
+                    if newalignsize == 4:
+                        newalignsize = 0
+                    newsize = len(replacedata) + is_replace_offset + newalignsize
+                    # бывают прошивки где между part_startoffset+part_size и началом следующей партиции есть место (больше чем требуется для выравнивания по 4 байта), неиспользуемое но оно есть
+                    # поэтому вычитаем не part_size[part_nr] + oldalignsize
+                    # а (part_startoffset[part_nr + 1] - part_startoffset[part_nr]) - полный размер партиции = полезный размер + выравнивание до 4 байт + неиспользуемые данные 00 до след. партиции
+                    if part_nr + 1 < partitions_count:
+                        sizediff = newsize - (part_startoffset[part_nr + 1] - part_startoffset[part_nr]) # разница в размерах - может быть отрицательной
+                    else:
+                        sizediff = newsize - part_size[part_nr] # для последней партиции если только брать её размер
+
+                    #print('new alignsize %d' % newalignsize)
+                    #print('newsize %d' % newsize)
+                    #print('sizediff %d' % sizediff)
+                    #print('write newsize to 0x%08X' % (part_size[0] + 28 + ((part_nr-1) * 12) + 4))
+                    fin.write(struct.pack('<I', newsize - newalignsize)) # заменим part_size новым без учёта выравнивания до 4 байт
+                    part_size[part_nr] = newsize - newalignsize # корректируем данные в нашей переменной
+                    fin.seek(4, 1) #пропустим part_id
+
+                    # пересчитаем part_startoffset для партиций идущих следом за заменяемой
+                    a = part_nr + 1
+                    while(a < partitions_count):
+                        fin.write(struct.pack('<I', part_startoffset[a] + sizediff))
+                        part_startoffset[a] = part_startoffset[a] + sizediff # корректируем данные в нашей переменной
+                        fin.seek(8, 1) # size и ID не поменяются
+                        a += 1
+
+                    # заменим партицию
+                    #print('replace part at 0x%08X' % (part_startoffset[part_nr] + is_replace_offset))
+                    fin.seek(part_startoffset[part_nr] + is_replace_offset, 0)
+                    fin.write(replacedata)
+
+                    # добавим сколько надо 00 для выравнивания до 4 байт адреса начала следующей партиции
+                    for b in range(newalignsize):
+                        fin.write(struct.pack('B', 0))
+
+                    # если заменяемая партиция не последняя то
+                    if part_nr + 1 < partitions_count:
+                        # допишем оставшиеся партиции
+                        fin.write(enddata)
+                    fin.truncate() # изменим размер файла
+                    fin.close()
+
+                    filesize = os.path.getsize(in_file)
+                    # TotalSize в NVTPACK_FW_HDR не меняется т.к. в нем только размеры заголовков
+                    total_file_size = filesize # корректируем данные в нашей переменной
+
+                    # если заменяем CKSM-партицию то в её заголовке нужно исправить DataSize
+                    if part_type[part_nr][:13] == '\033[93mCKSM\033[0m':
+                        fin.seek(part_startoffset[part_nr] + 0x14, 0)
+                        fin.write(struct.pack('<I', newsize - is_replace_offset))
+
+                    fin.close()
+                    return
+                else:
+                    # если это просто BCL1 партиция идущая с начала файла
+                    fin = open(in_file, 'r+b') # именно r+b для ЗАМЕНЫ данных
+                    fin.seek(part_size[0] + 28, 0)
+                    # высчитаем сколько нужно 00 для выравнивания новой партиции до кратности 4 байт
+                    newalignsize = (4 - ((len(replacedata) + is_replace_offset)%4))
+                    if newalignsize == 4:
+                        newalignsize = 0
+                    newsize = len(replacedata) + is_replace_offset + newalignsize
+                    # бывают прошивки где между part_startoffset+part_size и началом следующей партиции есть место (больше чем требуется для выравнивания по 4 байта), неиспользуемое но оно есть
+                    # поэтому вычитаем не part_size[part_nr] + oldalignsize
+                    # а (part_startoffset[part_nr + 1] - part_startoffset[part_nr]) - полный размер партиции = полезный размер + выравнивание до 4 байт + неиспользуемые данные 00 до след. партиции
+                    if part_nr + 1 < partitions_count:
+                        sizediff = newsize - (part_startoffset[part_nr + 1] - part_startoffset[part_nr]) # разница в размерах - может быть отрицательной
+                    else:
+                        sizediff = newsize - part_size[part_nr] # для последней партиции если только брать её размер
+
+                    #print('new alignsize %d' % newalignsize)
+                    #print('newsize %d' % newsize)
+                    #print('sizediff %d' % sizediff)
+                    #print('write newsize to 0x%08X' % (part_size[0] + 28 + ((part_nr-1) * 12) + 4))
+
+                    # пересчитаем part_startoffset для всех партиций в таблице (нулевой там нет)
+                    a = 1
+                    while(a < partitions_count):
+                        fin.write(struct.pack('<I', part_startoffset[a] + sizediff + 28 + (partitions_count - 1)*12)) # коррекция на величину изменения размера 0 партиции + размер заголовка _NVTPACK_FW_HDR + n*_NVTPACK_PARTITION_HDR
+                        part_startoffset[a] = part_startoffset[a] + sizediff + 28 + (partitions_count - 1)*12 # корректируем данные в нашей переменной
+                        fin.seek(8, 1) # size и ID не поменяются
+                        a += 1
+
+                    # если заменяемая партиция не последняя то
+                    if part_nr + 1 < partitions_count:
+                        # считали всё после нулевой партиции - вместе с _NVTPACK_FW_HDR и таблицей партиций
+                        fin.seek(part_size[0], 0)
+                        enddata = fin.read()
+
+                    # заменим партицию
+                    #print('replace part at 0x%08X' % (part_startoffset[part_nr] + is_replace_offset))
+                    fin.seek(part_startoffset[part_nr] + is_replace_offset, 0)
+                    fin.write(replacedata)
+
+                    part_size[part_nr] = newsize - newalignsize # корректируем данные в нашей переменной
+
+                    # добавим сколько надо 00 для выравнивания до 4 байт адреса начала следующей партиции
+                    for b in range(newalignsize):
+                        fin.write(struct.pack('B', 0))
+
+                    # если заменяемая партиция не последняя то
+                    if part_nr + 1 < partitions_count:
+                        # допишем оставшиеся партиции
+                        fin.write(enddata)
+                    fin.truncate() # изменим размер файла
+                    fin.close()
+
+                    filesize = os.path.getsize(in_file)
+                    # TotalSize в NVTPACK_FW_HDR не меняется т.к. в нем только размеры заголовков
+                    total_file_size = filesize # корректируем данные в нашей переменной
+
+                    # если заменяем CKSM-партицию то в её заголовке нужно исправить DataSize
+                    if part_type[part_nr][:13] == '\033[93mCKSM\033[0m':
+                        fin.seek(part_startoffset[part_nr] + 0x14, 0)
+                        fin.write(struct.pack('<I', newsize - is_replace_offset))
+
+                    fin.close()
+                    return
             else:
                 print('\033[91mError: Input data size and partition size is not same! Cancelled.\033[0m')
     else:
@@ -1477,6 +1721,9 @@ def fixCRC(partID):
 
     # fix CRC for whole file
     if FW_HDR2 == 1:
+        # Выведем новый размер файла прошивки т.к. он изменился
+        print('Firmware file size \033[94m{:>11,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
+    
         CRC_FW = MemCheck_CalcCheckSum16Bit(0, total_file_size, 0x24)
         if checksum_value == CRC_FW:
             if is_silent != 1:
@@ -1491,6 +1738,9 @@ def fixCRC(partID):
 
     else:
         if FW_HDR == 1:
+            # Выведем новый размер файла прошивки т.к. он изменился
+            print('Firmware file size \033[94m{:>11,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
+
             CRC_FW = MemCheck_CalcCheckSum16Bit(part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
             if checksum_value == CRC_FW:
                 if is_silent != 1:
@@ -1516,7 +1766,8 @@ def main():
     global NVTPACK_FW_HDR2_size
     global total_file_size
     global checksum_value
-
+    global NVTPACK_FW_HDR_AND_PARTITIONS_size
+    
     partitions_count = 0
     fin = open(in_file, 'rb')
 
@@ -1571,6 +1822,9 @@ def main():
                 checksum_value = struct.unpack('<I', fin.read(4))[0]
                 partitions_count = struct.unpack('<I', fin.read(4))[0] + 1  # + 1 так как есть еще нулевая BCL1 партиция
                 print('Found \033[93m%i\033[0m partitions' % (partitions_count))
+
+                total_file_size = os.path.getsize(in_file)
+                print('Firmware file size \033[93m{:>11,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
 
                 # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
                 if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
