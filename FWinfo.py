@@ -437,7 +437,12 @@ def compress_CKSM_SPARSE(part_nr, in2_file):
 
     # для SPARSE на вход должна подаваться папка партиции, а не файл
     if not os.path.exists(in2_file):
-        print('\033[91m%s folder does not found, exit\033[0m' % in2_file)
+        print('\033[91m%s folder does not found, exit\033[0m' % in2_file + '/mount')
+        exit(0)
+
+    # для сборки SPARSE нужно знать размер tempfile.ext4
+    if not os.path.exists(in2_file + '/tempfile.ext4'):
+        print('\033[91m%s file does not found, exit\033[0m' % in2_file +  + '/tempfile.ext4')
         exit(0)
 
     # run compilation dir to SPARSE EXT4 cmd
@@ -454,7 +459,7 @@ def compress_CKSM_SPARSE(part_nr, in2_file):
     # replace partition
     partition_replace(part_id[part_nr], 0x40, in2_file + '/tempSPARSEfile')
 
-    # удалим всю директорию, все равно после umount в ней пусто
+    # удалим всю директорию
     # delete tempfile & tempfile.ext4 & tempSPARSEfile
     os.system('rm -rf ' + in2_file)
 
