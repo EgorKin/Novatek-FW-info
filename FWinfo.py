@@ -575,18 +575,29 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
     out = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
 
+
+    fin.close()
+    fin = open(in2_file, 'rb')
+    dataread = bytearray(fin.read())
+    fin.close()
+
+    # с BCL1 в плане CRC всё интересно - есть CRC в заголовке BCL1 по смещению 0x4 который расчитывается в самом конце уже после сжатия
+    # а ещё есть CRC несжатых данных:
+    #   если по смещению 0x6C лежат FFFF то CRC_offset = 0x46E
+    # а если по смещению 0x6C лежат 55AA то CRC_offset = 0x6E
+    # и этот CRC нужно расчитать и записать до того как начать сжатие в BCL1
+    if (dataread[0x6C] == 0xFF) & (dataread[0x6D] == 0xFF):
+        newCRC = MemCheck_CalcCheckSum16Bit(in2_file, 0, len(dataread), 0x46E)
+        dataread[0x46E] = (newCRC & 0xFF)
+        dataread[0x46F] = ((newCRC >> 8) & 0xFF)
+    else:
+        if (dataread[0x6C] == 0x55) & (dataread[0x6D] == 0xAA):
+            newCRC = MemCheck_CalcCheckSum16Bit(in2_file, 0, len(dataread), 0x6E)
+            dataread[0x6E] = (newCRC & 0xFF)
+            dataread[0x6F] = ((newCRC >> 8) & 0xFF)
+
     # LZ77 compress
     if Algorithm == 0x09:
-        # Get marker symbol from original partition
-        #in_offset = in_offset + 0x10 #skip BCL1 header
-        #fin.seek(part_startoffset[part_nr] + in_offset, 0)
-        #marker = struct.unpack('B', fin.read(1))[0]
-        #print("LZ marker = 0x%0X" % marker)
-        fin.close()
-        fin = open(in2_file, 'rb')
-        dataread = fin.read()
-        fin.close()
-
         # размер в байтах сжимаемых данных
         insize = len(dataread)
 
@@ -802,7 +813,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         fout.write(struct.pack('>I', outpos)) # write packed size
         fout.close()
 
-        # пересчитываем CRC для BCL1 заголовка только после того как все остальное кроме CRC уже записали
+        # пересчитываем CRC для BCL1-заголовка только после того как все остальное кроме CRC уже записали
         newCRC = MemCheck_CalcCheckSum16Bit(out, 0, outpos + 0x10, 0x4)
         fout = open(out, 'r+b')
         fout.seek(4, 0)
@@ -812,37 +823,41 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
     # LZMA compress
     if Algorithm == 0x0B:
-        fin.close()
-        fin = open(in2_file, 'rb')
-        dataread = fin.read()
-        fin.close()
-        
         compress = lzma.compress(dataread, lzma.FORMAT_ALONE)
         fout = open(out, 'w+b')
         fout.write(struct.pack('>I', 0x42434C31)) # write BCL1
-        fout.write(bytes2skip)
+        fout.write(struct.pack('<H', 0x0000)) # write new CRC, unknown now - rewrite after compression
         fout.write(struct.pack('>H', Algorithm)) # write Algorithm
         fout.write(struct.pack('>I', len(dataread))) # write unpacked size
         fout.write(struct.pack('>I', len(compress))) # write packed size
         fout.write(compress) # write data
         fout.close()
+        
+        # пересчитываем CRC для BCL1-заголовка только после того как все остальное кроме CRC уже записали
+        newCRC = MemCheck_CalcCheckSum16Bit(out, 0, len(compress) + 0x10, 0x4)
+        fout = open(out, 'r+b')
+        fout.seek(4, 0)
+        fout.write(struct.pack('<H', newCRC)) # write new CRC value
+        fout.close()
         return
 
     # ZLIB compress
     if Algorithm == 0x0C:
-        fin.close()
-        fin = open(in2_file, 'rb')
-        dataread = fin.read()
-        fin.close()
-        
         compress = zlib.compress(dataread)
         fout = open(out, 'w+b')
         fout.write(struct.pack('>I', 0x42434C31)) # write BCL1
-        fout.write(bytes2skip)
+        fout.write(struct.pack('<H', 0x0000)) # write new CRC, unknown now - rewrite after compression
         fout.write(struct.pack('>H', Algorithm)) # write Algorithm
         fout.write(struct.pack('>I', len(dataread))) # write unpacked size
         fout.write(struct.pack('>I', len(compress))) # write packed size
         fout.write(compress) # write data
+        fout.close()
+        
+        # пересчитываем CRC для BCL1-заголовка только после того как все остальное кроме CRC уже записали
+        newCRC = MemCheck_CalcCheckSum16Bit(out, 0, len(compress) + 0x10, 0x4)
+        fout = open(out, 'r+b')
+        fout.seek(4, 0)
+        fout.write(struct.pack('<H', newCRC)) # write new CRC value
         fout.close()
         return
 
