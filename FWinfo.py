@@ -18,7 +18,8 @@
 # V4.3 - add support SPARSE partitions for -u and -c command
 # V4.4 - speed up LZ77 uncompress
 # V4.5 - add LZ compression for -c command; now support -u & -c for old firmware format; another temp folders struct for SPARSE partitions
-# V4.6 - show progress bar and elapsed time for LZ compression process
+# V4.6 - show progress bar and elapsed time for LZ77 compression process
+# V4.7 - BCL1 partitions CRC support
 
 
 import os, struct, sys, argparse, array
@@ -261,8 +262,7 @@ def get_args():
 
 
 
-def MemCheck_CalcCheckSum16Bit(in_offset, uiLen, ignoreCRCoffset):
-    global in_file
+def MemCheck_CalcCheckSum16Bit(in_file, in_offset, uiLen, ignoreCRCoffset):
     uiSum = 0
     pos = 0
     num_words = uiLen // 2
@@ -411,7 +411,7 @@ def compress_CKSM_BCL(part_nr, in2_file):
     # delete comp_partitionID file
     subprocess.run('rm -rf ' + comp_filename, shell=True)
     
-    # fix CRC
+    # fix CRC for CKSM
     is_silent = 0
     fixCRC(part_id[part_nr])
 
@@ -564,8 +564,8 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         print("\033[91mBCL1 marker not found, exit\033[0m")
         sys.exit(1)
 
-    # skip 2 bytes
-    bytes2skip = fin.read(2)
+    # skip old CRC 2 bytes
+    oldCRC = fin.read(2)
     # check compression algo
     Algorithm = struct.unpack('>H', fin.read(2))[0]
     if (Algorithm != 0x09) & (Algorithm != 0x0B) & (Algorithm != 0x0C):
@@ -625,22 +625,22 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
         fout = open(out, 'w+b')
         fout.write(struct.pack('>I', 0x42434C31)) # write BCL1
-        fout.write(bytes2skip)
+        fout.write(struct.pack('<H', 0x0000)) # write new CRC, unknown now - rewrite after compression
         fout.write(struct.pack('>H', Algorithm)) # write Algorithm
         fout.write(struct.pack('>I', insize)) # write unpacked size
         fout.write(struct.pack('>I', 0)) # write packed size, unknown now - rewrite after compression
-        
+
         # Lower values give faster compression, while higher values gives better compression.
         LZ_MAX_OFFSET = 0x7F7F#265000
 
         outputbuf = bytearray()
-        
+
         # для замеров скорости выполнения
         startT = datetime.now()
-        
+
         # для вывода прогресса работы
         oldcurrprogress = 0
-        
+
         # Remember the marker symbol for the decoder
         outputbuf.append(marker)
         #print("0x%02X" % marker)
@@ -792,15 +792,22 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
         fout.write(outputbuf)
         fout.close()
+
+        endT = datetime.now()
+        print("elapsed: %s" % str(endT - startT))
         
         #print("Compression to LZ BCL1 successfull")
         fout = open(out, 'r+b')
-        fout.seek(12)
+        fout.seek(12, 0)
         fout.write(struct.pack('>I', outpos)) # write packed size
         fout.close()
-        
-        endT = datetime.now()
-        print("elapsed: %s" % str(endT - startT))
+
+        # пересчитываем CRC для BCL1 заголовка только после того как все остальное кроме CRC уже записали
+        newCRC = MemCheck_CalcCheckSum16Bit(out, 0, outpos + 0x10, 0x4)
+        fout = open(out, 'r+b')
+        fout.seek(4, 0)
+        fout.write(struct.pack('<H', newCRC)) # write new CRC value
+        fout.close()
         return
 
     # LZMA compress
@@ -1180,7 +1187,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
     if partID == 3:
         temp_parttype = 'uboot'
         fin.seek(start_offset + 0x36E, 0)
-        CRC = MemCheck_CalcCheckSum16Bit(start_offset, part_size, 0x36E)
+        CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, part_size, 0x36E)
         if addinfo:
             part_type.append(temp_parttype)
             part_crc.append(struct.unpack('<H', fin.read(2))[0])
@@ -1303,7 +1310,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
             fin.seek(2, 1)
             uiChkValue = struct.unpack('<H', fin.read(2))[0]
             
-            CRC = MemCheck_CalcCheckSum16Bit(start_offset, uilength, 0x36)
+            CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, uilength, 0x36)
             
             if addinfo:
                 part_type.append(temp_parttype)
@@ -1317,7 +1324,9 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
     if partfirst4bytes == 0x42434C31:
         temp_parttype = '\033[93mBCL1\033[0m'
 
-        fin.seek(start_offset + 6, 0)        
+        fin.seek(start_offset + 4, 0)
+        uiChkValue = struct.unpack('<H', fin.read(2))[0] # CRC
+
         # compression algo
         compressAlgo = struct.unpack('>H', fin.read(2))[0]
         if compressAlgo in compressAlgoTypes:
@@ -1328,11 +1337,12 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         unpackedSize = struct.unpack('>I', fin.read(4))[0]
         packedSize = struct.unpack('>I', fin.read(4))[0]
         temp_parttype += ' \033[93m' + str(unpackedSize) + '\033[0m packed to \033[93m' + str(packedSize) + '\033[0m bytes'
-        CRC = 0
-        
+
+        CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, packedSize + 0x10, 0x4)
+
         if addinfo:
             part_type.append(temp_parttype)
-            part_crc.append(0)
+            part_crc.append(uiChkValue)
             part_crcCalc.append(CRC)
             fin.close()
         return temp_parttype, CRC
@@ -1391,7 +1401,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
             if deeppart != '':
                 temp_parttype += '\033[94m<--\033[0m' + deeppart
 
-            CRC = MemCheck_CalcCheckSum16Bit(start_offset, uiDataOffset + uiDataSize + uiPaddingSize, 0xC)
+            CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, uiDataOffset + uiDataSize + uiPaddingSize, 0xC)
 
             if addinfo:
                 part_type.append(temp_parttype)
@@ -1722,6 +1732,15 @@ def fixCRC(partID):
                     if is_silent != 1:
                         print('Partition ID ' + str(part_id[a]) + ' - \033[94mCRC fixed\033[0m')
                     break
+                # fix CRC for BCL1
+                if part_type[a][:13] == '\033[93mBCL1\033[0m':
+                    fin = open(in_file, 'r+b')
+                    fin.seek(part_startoffset[a] + 0x4, 0)
+                    fin.write(struct.pack('<H', calcCRC))
+                    fin.close()
+                    if is_silent != 1:
+                        print('Partition ID ' + str(part_id[a]) + ' - \033[94mCRC fixed\033[0m')
+                    break
             else:
                 if is_silent != 1:
                     print('Partition ID ' + str(part_id[a]) + ' - fix CRC not required')
@@ -1731,7 +1750,7 @@ def fixCRC(partID):
         # Выведем новый размер файла прошивки т.к. он изменился
         print('Firmware file size \033[94m{:>11,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
     
-        CRC_FW = MemCheck_CalcCheckSum16Bit(0, total_file_size, 0x24)
+        CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, total_file_size, 0x24)
         if checksum_value == CRC_FW:
             if is_silent != 1:
                 print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
@@ -1748,7 +1767,7 @@ def fixCRC(partID):
             # Выведем новый размер файла прошивки т.к. он изменился
             print('Firmware file size \033[94m{:>11,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
 
-            CRC_FW = MemCheck_CalcCheckSum16Bit(part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
+            CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
             if checksum_value == CRC_FW:
                 if is_silent != 1:
                     print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
@@ -1835,7 +1854,7 @@ def main():
 
                 # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
                 if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
-                    CRC_FW = MemCheck_CalcCheckSum16Bit(part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
+                    CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
                     if checksum_value == CRC_FW:
                         print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
                     else:
@@ -1880,7 +1899,7 @@ def main():
     
         # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
         if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
-            CRC_FW = MemCheck_CalcCheckSum16Bit(0, total_file_size, 0x24)
+            CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, total_file_size, 0x24)
             if checksum_value == CRC_FW:
                 print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
             else:
@@ -2000,7 +2019,7 @@ def main():
         # если что-то нашли в dtb то выводим расширенную информацию
         if len(dtbpart_ID) != 0:
             print(" -------------------------------------------------- PARTITIONS INFO ---------------------------------------------------")
-            print("|  ID   Name            start_offset  end_offset         size       ORIG_CRC   CALC_CRC              type              |")
+            print("|  ID   NAME            START_OFFSET  END_OFFSET         SIZE       ORIG_CRC   CALC_CRC              TYPE              |")
             print(" ----------------------------------------------------------------------------------------------------------------------")
         
             for a in range(partitions_count):
@@ -2027,7 +2046,14 @@ def main():
                             fin.write(struct.pack('<I', part_crcCalc[a]))
                             fin.close()
                             part_type[a] += ', \033[94mCRC fixed\033[0m'
-        
+                        # fix CRC for BCL1
+                        if part_type[a][:13] == '\033[93mBCL1\033[0m':
+                            fin = open(in_file, 'r+b')
+                            fin.seek(part_startoffset[a] + 0x4, 0)
+                            fin.write(struct.pack('<H', part_crcCalc[a]))
+                            fin.close()
+                            part_type[a] += ', \033[94mCRC fixed\033[0m'
+
                 if part_crc[a] == part_crcCalc[a]:
                     print("  %2i    %-15s  0x%08X - 0x%08X     %9i       0x%04X     \033[92m0x%04X\033[0m       %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
                 else:
@@ -2035,7 +2061,7 @@ def main():
             print(" ----------------------------------------------------------------------------------------------------------------------")
         else:
             print(" -------------------------------------------------- PARTITIONS INFO ---------------------------------------------------")
-            print("|  ID   start_offset  end_offset         size       ORIG_CRC   CALC_CRC                        type                    |")
+            print("|  ID   START_OFFSET  END_OFFSET         SIZE       ORIG_CRC   CALC_CRC                        TYPE                    |")
             print(" ----------------------------------------------------------------------------------------------------------------------")
         
             for a in range(partitions_count):
@@ -2060,6 +2086,13 @@ def main():
                             fin = open(in_file, 'r+b')
                             fin.seek(part_startoffset[a] + 0xC, 0)
                             fin.write(struct.pack('<I', part_crcCalc[a]))
+                            fin.close()
+                            part_type[a] += ', \033[94mCRC fixed\033[0m'
+                        # fix CRC for BCL1
+                        if part_type[a][:13] == '\033[93mBCL1\033[0m':
+                            fin = open(in_file, 'r+b')
+                            fin.seek(part_startoffset[a] + 0x4, 0)
+                            fin.write(struct.pack('<H', part_crcCalc[a]))
                             fin.close()
                             part_type[a] += ', \033[94mCRC fixed\033[0m'
         
@@ -2071,7 +2104,7 @@ def main():
 
         if fixCRC_partID != -1:
             if FW_HDR2 == 1:
-                CRC_FW = MemCheck_CalcCheckSum16Bit(0, total_file_size, 0x24)
+                CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, total_file_size, 0x24)
                 if checksum_value == CRC_FW:
                     print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
                 else:
@@ -2082,7 +2115,7 @@ def main():
                     print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
             else:
                 if FW_HDR == 1:
-                    CRC_FW = MemCheck_CalcCheckSum16Bit(part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
+                    CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
                     if checksum_value == CRC_FW:
                         print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
                     else:
