@@ -1,4 +1,4 @@
-# Creator: Dex9999(4pda.to user) aka Dex aka EgorKin
+# Author: Dex9999(4pda.to user) aka Dex aka EgorKin
 
 # V2.0 - improve parsing, now support Viofo A139 and 70Mai A500S firmwares
 # V2.1 - add LZ77 unpacker
@@ -18,6 +18,7 @@
 # V4.3 - add support SPARSE partitions for -u and -c command
 # V4.4 - speed up LZ77 uncompress
 # V4.5 - add LZ compression for -c command; now support -u & -c for old firmware format; another temp folders struct for SPARSE partitions
+# V4.6 - show progress bar and elapsed time for LZ compression process
 
 
 import os, struct, sys, argparse, array
@@ -599,7 +600,6 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         #jumptable = &work[ 65536 ];
 
         # Build a "jump table"
-        i = 0
         for i in range(65536):
             work[ i ] = 0xffffffff
 
@@ -627,13 +627,19 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         fout.write(struct.pack('>I', 0x42434C31)) # write BCL1
         fout.write(bytes2skip)
         fout.write(struct.pack('>H', Algorithm)) # write Algorithm
-        fout.write(struct.pack('>I', os.path.getsize(in2_file))) # write unpacked size
-        fout.write(struct.pack('>I', 0)) # write packed size, unknown now - write after compression
+        fout.write(struct.pack('>I', insize)) # write unpacked size
+        fout.write(struct.pack('>I', 0)) # write packed size, unknown now - rewrite after compression
         
         # Lower values give faster compression, while higher values gives better compression.
         LZ_MAX_OFFSET = 0x7F7F#265000
 
         outputbuf = bytearray()
+        
+        # для замеров скорости выполнения
+        startT = datetime.now()
+        
+        # для вывода прогресса работы
+        oldcurrprogress = 0
         
         # Remember the marker symbol for the decoder
         outputbuf.append(marker)
@@ -656,45 +662,29 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
             while (index != 0xffffffff) & ((inpos - index) < LZ_MAX_OFFSET):
                 # Get pointer to candidate string
-                ##ptr2 = &ptr1[ -(int)offset ]
                 #ptr2 = &in[ index ];
 
                 # Quickly determine if this is a candidate (for speed)
-                try:
-                    if dataread[ index + bestlength ] == dataread[ inpos + bestlength ]:
-                        # Determine maximum length for this offset
-                        offset = inpos - index
-                        if bytesleft < offset:
-                            maxlength = bytesleft
+                if dataread[ index + bestlength ] == dataread[ inpos + bestlength ]:
+                    # Determine maximum length for this offset
+                    offset = inpos - index
+                    if bytesleft < offset:
+                        maxlength = bytesleft
+                    else:
+                        maxlength = offset
+                    # Count maximum length match at this offset
+                    #length = _LZ_StringCompare( ptr1, ptr2, 2, maxlength );
+                    length = 2
+                    while (length < maxlength):
+                        if (dataread[ inpos + length ] == dataread[ index + length]):
+                            length += 1
                         else:
-                            maxlength = offset
-                        # Count maximum length match at this offset
-                        ##length = _LZ_StringCompare(dataread[ inpos ], dataread[ inpos - offset ], 0, maxlength)
-                        #length = _LZ_StringCompare( ptr1, ptr2, 2, maxlength );
-                        try:
-                            length = 2
-                            while (length < maxlength):
-                                if (dataread[ inpos + length ] == dataread[ index + length]):
-                                    length += 1
-                                else:
-                                    break
-                        except IndexError:
-                            print("OOPS: inpos=%d, length=%d, maxlength=%d, index=%d" %(inpos, length, maxlength, index))
-                        #static unsigned int _LZ_StringCompare( unsigned char * str1, unsigned char * str2, unsigned int minlen, unsigned int maxlen )
-                        #{
-                        #    unsigned int len;
-                        #
-                        #    for( len = minlen; (len < maxlen) && (str1[len] == str2[len]); ++ len );
-                        #
-                        #    return len;
-                        #}
-    
-                        # Better match than any previous match?
-                        if length > bestlength:
-                            bestlength = length
-                            bestoffset = offset
-                except IndexError:
-                    print("OOPS: inpos=%d, bestlength=%d, index=%d" %(inpos, bestlength, index))
+                            break
+
+                    # Better match than any previous match?
+                    if length > bestlength:
+                        bestlength = length
+                        bestoffset = offset
 
                 # Get next possible index from jump table
                 index = work[ 65536 + index ]
@@ -779,10 +769,12 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                     outpos += 1
                 bytesleft -= 1
 
-            # просто вывод прогресса работы
-            #if (insize - (insize-bytesleft)) % 1000 == 0:
-            #    print("total = %d" %(insize - (insize-bytesleft)))
-
+            # вывод прогресса работы упаковщика
+            currprogress = round(inpos/insize*100)
+            if currprogress > oldcurrprogress:
+                updateProgressBar(currprogress)
+                oldcurrprogress = currprogress
+            
         # Dump remaining bytes, if any
         while inpos < insize:
             if dataread[ inpos ] == marker:
@@ -806,6 +798,9 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         fout.seek(12)
         fout.write(struct.pack('>I', outpos)) # write packed size
         fout.close()
+        
+        endT = datetime.now()
+        print("elapsed: %s" % str(endT - startT))
         return
 
     # LZMA compress
@@ -843,6 +838,17 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         fout.write(compress) # write data
         fout.close()
         return
+
+
+
+# функция для отображения прогресса выполнения операций (распаковки/запаковки партиций к примеру)
+def updateProgressBar(value):
+    line = '\r\033[93m%s%%\033[0m[\033[94m%s\033[0m%s]' % ( str(value).rjust(3), '#' * round((float(value)/100) * 70), '-' * round(70 -((float(value)/100) * 70))) # 70 - длина прогресс-бара
+    print(line, end='')
+    sys.stdout.flush()
+    # чтобы сделать переход на новую строку после прогресс бара
+    if value == 100:
+        print('')
 
 
 
@@ -901,13 +907,8 @@ def uncompress(in_offset, out_filename, size):
         # mount ext4 to folder
         os.system('mount ' + out_filename + '/tempfile.ext4 ' + out_filename + '/mount')
 
-        # файлов нет пока не выполнить umount, будут удалены при сборке обратно в SPARSE и замене партиции в FW
-        # delete tempfile
-        #os.system('rm -rf ' + './' + out_filename + '/' + 'tempfile')
-        
-        # delete tempfile.ext4
-        #os.system('rm -rf ' + './' + out_filename + '/' + 'tempfile.ext4')
-
+        # удалим tempfile, tempfile.ext4 нам еще нужен будет для сборки обратно
+        os.system('rm -rf ' + './' + out_filename + '/tempfile')
         return
 
     print("\033[91mBCL1 or UBI# or SPARSE markers not found, exit\033[0m")
@@ -1147,7 +1148,7 @@ def SearchPartNamesInDTB(partitions_count):
                 #print("0x%0X" % startat)
                 if alreadyfound == 0:
                     fillIDPartNames(part_startoffset[a] + startat)
-                    alreadyfound = 1 # чтобы снова не добавлять инфу из партиции fdt.restore
+                    alreadyfound = 1 # чтобы снова не добавлять инфу из следующих партиций навроде fdt.restore
 
 
 
@@ -1540,8 +1541,8 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                 fin.close()
                 return
 
-            # для более старой версии прошивок
-            if FW_HDR == 1:
+            # для более старой версии прошивок (BCL1 + NVTPACK_FW_HDR) или для просто BCL1
+            if (FW_HDR == 1) | ((FW_HDR == 0) & (partitions_count == 1)):
                 fin = open(in_file, 'rb')
                 # если заменяемая партиция не последняя то
                 if part_nr + 1 < partitions_count:
@@ -1678,7 +1679,8 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                     fin.close()
                     return
             else:
-                print('\033[91mError: Input data size and partition size is not same! Cancelled.\033[0m')
+                print('\033[91mError: Could not replace this partition.\033[0m')
+                exit(0)
     else:
         print('\033[91mCould not find partiton with ID %i\033[0m' % is_replace)
 
