@@ -1,6 +1,12 @@
+# ==================================================================================
+# NTKFWinfo - python script for work with Novatek firmware files
+# Show full FW info, allow extract/replace/decompress/compress partitions, fix CRC
+#
 # Author: Dex9999(4pda.to user) aka Dex aka EgorKin
+# ==================================================================================
 
-# I suggest use pypy3 (apt install pypy3) for speed up script (especially for LZ77 compression) not python3
+
+# I suggest use pypy3 (apt install pypy3) for speed up script for LZ77 compression, not python3
 
 
 # V2.0 - improve parsing, now support Viofo A139 and 70Mai A500S firmwares
@@ -24,6 +30,7 @@
 # V4.6 - show progress bar and elapsed time for LZ77 compression process
 # V4.7 - BCL1 partitions CRC support
 # V4.8 - add -o option for define working dir for output partitions
+# V4.9 - add banner; pre-release version
 
 
 import os, struct, sys, argparse, array
@@ -31,7 +38,7 @@ from datetime import datetime
 import zlib
 import lzma
 import subprocess
-
+import platform
 
 
 in_file = ''
@@ -182,15 +189,15 @@ def get_args():
     global is_silent
     global workdir
 
-    p = argparse.ArgumentParser(add_help=True, description='This script working with ARM-based Novatek firmware binary file. Creator: Dex9999(4pda.to user) aka Dex aka EgorKin')
+    p = argparse.ArgumentParser(add_help=True, description='This script works with Novatek firmwares binary file. Show full FW info, allow extract/replace/decompress/compress partitions, fix CRC. Creator: Dex9999(4pda.to user) aka Dex aka EgorKin')
     p.add_argument('-i',metavar='filename', nargs=1, help='input file')
     p.add_argument('-x',metavar=('partID', 'offset'), nargs='+', help='extract partition by ID with optional start offset. Or all partitions if partID = ALL')
-    p.add_argument('-r',metavar=('partID', 'offset', 'filename'), nargs=3, help='replace partition by ID with start offset using iput file')
+    p.add_argument('-r',metavar=('partID', 'offset', 'filename'), nargs=3, help='replace partition by ID with start offset using input file')
     p.add_argument('-u',metavar=('partID', 'offset'), type=int, nargs='+', help='uncompress partition by ID with optional start offset')
-    p.add_argument('-c',metavar=('partID', 'offset'), type=int, nargs='+', help='compress partition by ID and merge to firmware file with optional start offset')
+    p.add_argument('-c',metavar=('partID'), type=int, nargs=1, help='compress partition by ID and merge to firmware file')
     p.add_argument('-fixCRC', action='store_true', help='fix CRC value for all possible partitions')
-    p.add_argument('-silent', action='store_true', help='do not print messages')
-    p.add_argument('-o',metavar='output', nargs=1, help='working dir')
+    p.add_argument('-silent', action='store_true', help='do not print messages, except errors')
+    p.add_argument('-o',metavar='outputdir', nargs=1, help='set working dir')
 
     if len(sys.argv) < 3:
         p.print_help(sys.stderr)
@@ -249,15 +256,8 @@ def get_args():
 
     if args.c:
         is_compress = args.c[0]
-        # если задан 2ой аргумент - offset
-        if len(args.c) == 2:
-            is_compress_offset = int(args.c[1])
-        else:
-            # если offset не задан - то будет -1 для того чтобы дальше присвоить либо 0x40 (для CKSM) либо 0 (в остальных случаях)
-            is_compress_offset = -1
     else:
         is_compress = -1
-        is_compress_offset = -1
 
     if args.fixCRC:
         fixCRC_partID = 1
@@ -270,7 +270,7 @@ def get_args():
         is_silent = -1
 
 
-    return (in_file, is_extract, is_extract_offset, is_extract_all, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, is_compress, is_compress_offset, fixCRC_partID)
+    return (in_file, is_extract, is_extract_offset, is_extract_all, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, is_compress, fixCRC_partID)
 
 
 
@@ -1859,7 +1859,7 @@ def main():
     global in_file
     #global in_offset
     global out_file
-    in_file, is_extract, is_extract_offset, is_extract_all, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, is_compress, is_compress_offset, fixCRC_partID = get_args()
+    in_file, is_extract, is_extract_offset, is_extract_all, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, is_compress, fixCRC_partID = get_args()
     global partitions_count
     global FW_HDR
     global FW_HDR2
@@ -1872,7 +1872,18 @@ def main():
     partitions_count = 0
     fin = open(in_file, 'rb')
 
-    #os.system('color')
+    # for color output support in Windows
+    if platform.system() == 'Windows':
+        os.system('color')
+
+    if is_silent != 1:
+        print("===================================================================================")
+        print(" \033[92mNTKFWinfo\033[0m - python script for work with Novatek firmware files")
+        print(" Show full FW info, allow extract/replace/decompress/compress partitions, fix CRC")
+        print("")
+        print(" Author: \033[93mDex9999\033[0m(4pda.to user) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m")
+        print("===================================================================================")
+
 
     FW_HDR = 0
     FW_HDR2 = 0
@@ -2078,10 +2089,7 @@ def main():
                 in2_file = in_file + '-uncomp_partitionID' + str(part_id[part_nr])
 
             if is_silent != 1:
-                if is_compress_offset != -1:
-                    print('Compress \033[93m%s\033[0m to partition ID %i at 0x%08X + 0x%08X' % (in2_file, part_id[part_nr], part_startoffset[part_nr], is_compress_offset))
-                else:
-                    print('Compress \033[93m%s\033[0m to partition ID %i at 0x%08X' % (in2_file, part_id[part_nr], part_startoffset[part_nr]))
+                print('Compress \033[93m%s\033[0m to partition ID %i at 0x%08X' % (in2_file, part_id[part_nr], part_startoffset[part_nr]))
 
             compress(part_nr, in2_file)
 
