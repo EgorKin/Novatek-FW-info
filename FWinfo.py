@@ -1,5 +1,8 @@
 # Author: Dex9999(4pda.to user) aka Dex aka EgorKin
 
+# I suggest use pypy3 (apt install pypy3) for speed up script (especially for LZ77 compression) not python3
+
+
 # V2.0 - improve parsing, now support Viofo A139 and 70Mai A500S firmwares
 # V2.1 - add LZ77 unpacker
 # V3.0 - add get info about partition names from fdt(dtb) partition
@@ -20,6 +23,7 @@
 # V4.5 - add LZ compression for -c command; now support -u & -c for old firmware format; another temp folders struct for SPARSE partitions
 # V4.6 - show progress bar and elapsed time for LZ77 compression process
 # V4.7 - BCL1 partitions CRC support
+# V4.8 - add -o option for define working dir for output partitions
 
 
 import os, struct, sys, argparse, array
@@ -176,6 +180,7 @@ def get_args():
     global is_uncompress
     global is_compress
     global is_silent
+    global workdir
 
     p = argparse.ArgumentParser(add_help=True, description='This script working with ARM-based Novatek firmware binary file. Creator: Dex9999(4pda.to user) aka Dex aka EgorKin')
     p.add_argument('-i',metavar='filename', nargs=1, help='input file')
@@ -185,8 +190,8 @@ def get_args():
     p.add_argument('-c',metavar=('partID', 'offset'), type=int, nargs='+', help='compress partition by ID and merge to firmware file with optional start offset')
     p.add_argument('-fixCRC', action='store_true', help='fix CRC value for all possible partitions')
     p.add_argument('-silent', action='store_true', help='do not print messages')
-    #p.add_argument('-o',metavar='output',nargs=1,help='output file')
-    #print("len=%i" %(len(sys.argv)))
+    p.add_argument('-o',metavar='output', nargs=1, help='working dir')
+
     if len(sys.argv) < 3:
         p.print_help(sys.stderr)
         sys.exit(1)
@@ -194,6 +199,13 @@ def get_args():
     args=p.parse_args(sys.argv[1:])
     in_file=args.i[0]
 
+    if args.o:
+        workdir = args.o[0]
+        if not os.path.exists(workdir):
+            os.system('mkdir ' + workdir)
+    else:
+        workdir = ''
+    
     if args.x:
         #если offset = ALL - извлекаем все партиции
         if (args.x[0] == 'all') | (args.x[0] == 'ALL'):
@@ -262,12 +274,12 @@ def get_args():
 
 
 
-def MemCheck_CalcCheckSum16Bit(in_file, in_offset, uiLen, ignoreCRCoffset):
+def MemCheck_CalcCheckSum16Bit(input_file, in_offset, uiLen, ignoreCRCoffset):
     uiSum = 0
     pos = 0
     num_words = uiLen // 2
     
-    fin = open(in_file, 'rb')
+    fin = open(input_file, 'rb')
     fin.seek(in_offset, 0)
     fread = fin.read(uiLen)
     fin.close()
@@ -322,7 +334,7 @@ def compress_CKSM_UBI(part_nr, in2_file):
     fin.seek(part_startoffset[part_nr] + 0x40, 0)
     finread = fin.read(part_size[part_nr] - 0x40)
     fin.close()
-    fpartout = open('./' + in2_file + '/' + 'tempfile', 'w+b')
+    fpartout = open(in2_file + '/' + 'tempfile', 'w+b')
     fpartout.write(finread)
     fpartout.close()
 
@@ -503,7 +515,7 @@ def compress_BCL(part_nr, in2_file):
     partition_replace(part_id[part_nr], 0, comp_filename)
 
     # delete comp_partitionID file
-    ####subprocess.run('rm -rf ' + comp_filename, shell=True)
+    subprocess.run('rm -rf ' + comp_filename, shell=True)
     
     # fix CRC
     is_silent = 0
@@ -643,7 +655,6 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
         # для замеров скорости выполнения
         startT = datetime.now()
-
         # для вывода прогресса работы
         oldcurrprogress = 0
 
@@ -658,18 +669,12 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         # Main compression loop
         bytesleft = insize - 1
         while bytesleft > 3:
-            # Get pointer to current position
-            #ptr1 = dataread[ inpos ]
-
             # Search history window for maximum length string match
             bestlength = 3
             bestoffset = 0
-            #index = dataread[ inpos ]
             
             j = work[ 65536 + inpos ]
             while (j != 0xffffffff) & ((inpos - j) < LZ_MAX_OFFSET):
-                # Get pointer to candidate string
-                #ptr2 = dataread[ j ]
 
                 # Quickly determine if this is a candidate (for speed)
                 if dataread[ j + bestlength ] == dataread[ inpos + bestlength ]:
@@ -731,7 +736,8 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                     outpos += num_bytes
                     #print("num_bytes = %d" % num_bytes)
                     #print("buf = %d" % buf)
-                    for a in range(num_bytes):
+                    
+                    while num_bytes > 0:
                         outputbuf.append((buf>>(8*(num_bytes - 1)))&0xFF)
                         num_bytes -= 1
                     
@@ -758,7 +764,8 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                     outpos += num_bytes
                     #print("num_bytes = %d" % num_bytes)
                     #print("buf = %d" % buf)
-                    for a in range(num_bytes):
+                    
+                    while num_bytes > 0:
                         outputbuf.append((buf>>(8*(num_bytes - 1)))&0xFF)
                         num_bytes -= 1
                     
@@ -800,7 +807,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
         fout.write(outputbuf)
         # нашел упоминание что надо бы дописать к данным 00 для выравнивания по 4 байтам
-        # но делаю это только если нулевая партиция (без этого NVTPACK_FW_HDR будет не выровнен)
+        # но делаю это только если нулевая партиция (без этого адрес начала NVTPACK_FW_HDR будет не выровнен)
         addsize = 0
         if part_id[part_nr] == 0:
             addsize = (len(outputbuf) % 4)
@@ -814,7 +821,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         #print("Compression to LZ BCL1 successfull")
         fout = open(out, 'r+b')
         fout.seek(12, 0)
-        fout.write(struct.pack('>I', outpos + addsize)) # write packed size - если сделать выравнивание тут надо + n
+        fout.write(struct.pack('>I', outpos + addsize)) # write packed size
         fout.close()
 
         endT = datetime.now()
@@ -901,7 +908,7 @@ def updateProgressBar(value):
     line = '\r\033[93m%s%%\033[0m[\033[94m%s\033[0m%s]' % ( str(value).rjust(3), '#' * round((float(value)/100) * 70), '-' * round(70 -((float(value)/100) * 70))) # 70 - длина прогресс-бара
     print(line, end='')
     sys.stdout.flush()
-    # чтобы сделать переход на новую строку после прогресс бара
+    # чтобы сделать переход на новую строку после 100% прогресс бара
     if value == 100:
         print('')
 
@@ -918,7 +925,7 @@ def uncompress(in_offset, out_filename, size):
 
     if FourCC == b'BCL1':
         fin.close()
-        BCL1_uncompress(in_offset)
+        BCL1_uncompress(in_offset, out_filename)
         return
 
     if FourCC == b'UBI#':
@@ -930,15 +937,15 @@ def uncompress(in_offset, out_filename, size):
         fin.seek(in_offset, 0)
         finread = fin.read(size)
         fin.close()
-        fpartout = open('./' + out_filename + '/' + 'tempfile', 'w+b')
+        fpartout = open(out_filename + '/' + 'tempfile', 'w+b')
         fpartout.write(finread)
         fpartout.close()
 
         #unpack UBIFS to created dir
-        os.system('ubireader_extract_files -k -i -f ' + '-o ' + out_filename + ' ./' + out_filename + '/' + 'tempfile')
+        os.system('ubireader_extract_files -k -i -f ' + '-o ' + out_filename + ' ' + out_filename + '/' + 'tempfile')
 
         # delete tempfile
-        os.system('rm -rf ' + './' + out_filename + '/' + 'tempfile')
+        os.system('rm -rf ' + out_filename + '/' + 'tempfile')
         return
 
     # SPARSE EXT4
@@ -952,7 +959,7 @@ def uncompress(in_offset, out_filename, size):
         fin.seek(in_offset, 0)
         finread = fin.read(size)
         fin.close()
-        fpartout = open('./' + out_filename + '/tempfile', 'w+b')
+        fpartout = open(out_filename + '/tempfile', 'w+b')
         fpartout.write(finread)
         fpartout.close()
 
@@ -963,7 +970,7 @@ def uncompress(in_offset, out_filename, size):
         os.system('mount ' + out_filename + '/tempfile.ext4 ' + out_filename + '/mount')
 
         # удалим tempfile, tempfile.ext4 нам еще нужен будет для сборки обратно
-        os.system('rm -rf ' + './' + out_filename + '/tempfile')
+        os.system('rm -rf ' + out_filename + '/tempfile')
         return
 
     print("\033[91mBCL1 or UBI# or SPARSE markers not found, exit\033[0m")
@@ -971,9 +978,8 @@ def uncompress(in_offset, out_filename, size):
 
 
 
-def BCL1_uncompress(in_offset):
+def BCL1_uncompress(in_offset, out_filename):
     global in_file
-    global out_file
 
 
     fin = open(in_file, 'rb')
@@ -993,7 +999,7 @@ def BCL1_uncompress(in_offset):
         sys.exit(1)
 
 
-    fout = open(out_file, 'w+b')
+    fout = open(out_filename, 'w+b')
 
     outsize = struct.unpack('>I', fin.read(4))[0]
     insize = struct.unpack('>I', fin.read(4))[0]
@@ -1011,9 +1017,9 @@ def BCL1_uncompress(in_offset):
         outputbuf = bytearray()
 
         # для замеров скорости выполнения
-        startT = datetime.now()
+        #startT = datetime.now()
         # для вывода прогресса работы
-        oldcurrprogress = 0
+        #oldcurrprogress = 0
         
         # Main decompression loop
         outpos = 0;
@@ -1087,17 +1093,17 @@ def BCL1_uncompress(in_offset):
                 outpos += 1
 
             # вывод прогресса работы упаковщика
-            currprogress = round(inpos/insize*100)
-            if currprogress > oldcurrprogress:
-                updateProgressBar(currprogress)
-                oldcurrprogress = currprogress
+            #currprogress = round(inpos/insize*100)
+            #if currprogress > oldcurrprogress:
+            #    updateProgressBar(currprogress)
+            #    oldcurrprogress = currprogress
 
         fout.write(outputbuf)
         fin.close()
         fout.close()
 
-        endT = datetime.now()
-        print("elapsed: %s" % str(endT - startT))
+        #endT = datetime.now()
+        #print("elapsed: %s" % str(endT - startT))
 
 
     # LZMA uncompress
@@ -1482,6 +1488,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
 def partition_extract(is_extract, is_extract_offset):
     global partitions_count
+    global workdir
 
     part_nr = -1
     for a in range(partitions_count):
@@ -1489,7 +1496,10 @@ def partition_extract(is_extract, is_extract_offset):
             part_nr = a
             break
     if part_nr != -1:
-        out_file = in_file + '-partitionID' + str(part_id[part_nr])
+        if workdir != '':
+            out_file = workdir + '/' + in_file + '-partitionID' + str(part_id[part_nr])
+        else:
+            out_file = in_file + '-partitionID' + str(part_id[part_nr])
 
         if is_extract_offset != -1:
             if is_silent != 1:
@@ -1516,6 +1526,7 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
     global partitions_count
     global NVTPACK_FW_HDR2_size
     global total_file_size
+    
 
     part_nr = -1
     for a in range(partitions_count):
@@ -1523,6 +1534,10 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
             part_nr = a
             break
     if part_nr != -1:
+        if not os.path.exists(is_replace_file):
+            print('\033[91m%s file does not found, exit\033[0m' % is_replace_file)
+            exit(0)
+    
         if is_silent != 1:
             print('Replace partition ID %i from 0x%08X + 0x%08X using inputfile \033[93m%s\033[0m' % (is_replace, part_startoffset[part_nr], is_replace_offset, is_replace_file))
         freplace = open(is_replace_file, 'rb')
@@ -1852,6 +1867,7 @@ def main():
     global total_file_size
     global checksum_value
     global NVTPACK_FW_HDR_AND_PARTITIONS_size
+    global workdir
     
     partitions_count = 0
     fin = open(in_file, 'rb')
@@ -2017,7 +2033,10 @@ def main():
                 part_nr = a
                 break
         if part_nr != -1:
-            out_file = in_file + '-uncomp_partitionID' + str(part_id[part_nr])
+            if workdir != '':
+                out_file = workdir + '/' + in_file + '-uncomp_partitionID' + str(part_id[part_nr])
+            else:
+                out_file = in_file + '-uncomp_partitionID' + str(part_id[part_nr])
             
             if is_silent != 1:
                 if is_uncompress_offset != -1:
@@ -2053,7 +2072,10 @@ def main():
                 part_nr = a
                 break
         if part_nr != -1:
-            in2_file = in_file + '-uncomp_partitionID' + str(part_id[part_nr])
+            if workdir != '':
+                in2_file = workdir + '/' + in_file + '-uncomp_partitionID' + str(part_id[part_nr])
+            else:
+                in2_file = in_file + '-uncomp_partitionID' + str(part_id[part_nr])
 
             if is_silent != 1:
                 if is_compress_offset != -1:
