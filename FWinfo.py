@@ -2099,98 +2099,40 @@ def main():
         exit(0)
 
 
-    fin.close()
-
-
-
-    # если вообще что-то нашли
-    if partitions_count > 0:
-        # если что-то нашли в dtb то выводим расширенную информацию
-        if len(dtbpart_ID) != 0:
-            print(" -------------------------------------------------- PARTITIONS INFO ---------------------------------------------------")
-            print("|  ID   NAME            START_OFFSET  END_OFFSET         SIZE       ORIG_CRC   CALC_CRC              TYPE              |")
-            print(" ----------------------------------------------------------------------------------------------------------------------")
-        
-            for a in range(partitions_count):
-                if part_crc[a] != part_crcCalc[a]:
-                    if fixCRC_partID != -1:
-                        # fix CRC for uboot
-                        if part_type[a] == 'uboot':
-                            fin = open(in_file, 'r+b')
-                            fin.seek(part_startoffset[a] + 0x36E, 0)
-                            fin.write(struct.pack('<H', part_crcCalc[a]))
-                            fin.close()
-                            part_type[a] += ', \033[94mCRC fixed\033[0m'
-                        # fix CRC for MODELEXT
-                        if part_type[a][:13] == 'MODELEXT INFO':
-                            fin = open(in_file, 'r+b')
-                            fin.seek(part_startoffset[a] + 0x36, 0)
-                            fin.write(struct.pack('<H', part_crcCalc[a]))
-                            fin.close()
-                            part_type[a] += ', \033[94mCRC fixed\033[0m'
-                        # fix CRC for CKSM
-                        if part_type[a][:13] == '\033[93mCKSM\033[0m':
-                            fin = open(in_file, 'r+b')
-                            fin.seek(part_startoffset[a] + 0xC, 0)
-                            fin.write(struct.pack('<I', part_crcCalc[a]))
-                            fin.close()
-                            part_type[a] += ', \033[94mCRC fixed\033[0m'
-                        # fix CRC for BCL1
-                        if part_type[a][:13] == '\033[93mBCL1\033[0m':
-                            fin = open(in_file, 'r+b')
-                            fin.seek(part_startoffset[a] + 0x4, 0)
-                            fin.write(struct.pack('<H', part_crcCalc[a]))
-                            fin.close()
-                            part_type[a] += ', \033[94mCRC fixed\033[0m'
-
-                if part_crc[a] == part_crcCalc[a]:
-                    print("  %2i    %-15s  0x%08X - 0x%08X     %9i       0x%04X     \033[92m0x%04X\033[0m       %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
-                else:
-                    print("  %2i    %-15s  0x%08X - 0x%08X     %9i       0x%04X     \033[91m0x%04X\033[0m       %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
-            print(" ----------------------------------------------------------------------------------------------------------------------")
-        else:
-            print(" -------------------------------------------------- PARTITIONS INFO ---------------------------------------------------")
-            print("|  ID   START_OFFSET  END_OFFSET         SIZE       ORIG_CRC   CALC_CRC                        TYPE                    |")
-            print(" ----------------------------------------------------------------------------------------------------------------------")
-        
-            for a in range(partitions_count):
-                if part_crc[a] != part_crcCalc[a]:
-                    if fixCRC_partID != -1:
-                        # fix CRC for uboot
-                        if part_type[a] == 'uboot':
-                            fin = open(in_file, 'r+b')
-                            fin.seek(part_startoffset[a] + 0x36E, 0)
-                            fin.write(struct.pack('<H', part_crcCalc[a]))
-                            fin.close()
-                            part_type[a] += ', \033[94mCRC fixed\033[0m'
-                        # fix CRC for MODELEXT
-                        if part_type[a][:13] == 'MODELEXT INFO':
-                            fin = open(in_file, 'r+b')
-                            fin.seek(part_startoffset[a] + 0x36, 0)
-                            fin.write(struct.pack('<H', part_crcCalc[a]))
-                            fin.close()
-                            part_type[a] += ', \033[94mCRC fixed\033[0m'
-                        # fix CRC for CKSM
-                        if part_type[a][:13] == '\033[93mCKSM\033[0m':
-                            fin = open(in_file, 'r+b')
-                            fin.seek(part_startoffset[a] + 0xC, 0)
-                            fin.write(struct.pack('<I', part_crcCalc[a]))
-                            fin.close()
-                            part_type[a] += ', \033[94mCRC fixed\033[0m'
-                        # fix CRC for BCL1
-                        if part_type[a][:13] == '\033[93mBCL1\033[0m':
-                            fin = open(in_file, 'r+b')
-                            fin.seek(part_startoffset[a] + 0x4, 0)
-                            fin.write(struct.pack('<H', part_crcCalc[a]))
-                            fin.close()
-                            part_type[a] += ', \033[94mCRC fixed\033[0m'
-        
-                if part_crc[a] == part_crcCalc[a]:
-                    print("  %2i     0x%08X - 0x%08X     %9i       0x%04X     \033[92m0x%04X\033[0m       %s" % (part_id[a], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
-                else:
-                    print("  %2i     0x%08X - 0x%08X     %9i       0x%04X     \033[91m0x%04X\033[0m       %s" % (part_id[a], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
-            print(" ----------------------------------------------------------------------------------------------------------------------")
-
+    # fix CRC values for partitions and whole firmware file
+    if fixCRC_partID != -1:
+        # fix partitions CRC
+        for a in range(partitions_count):
+            if part_crc[a] != part_crcCalc[a]:
+                # fix CRC for uboot
+                if part_type[a] == 'uboot':
+                    fin = open(in_file, 'r+b')
+                    fin.seek(part_startoffset[a] + 0x36E, 0)
+                    fin.write(struct.pack('<H', part_crcCalc[a]))
+                    fin.close()
+                    part_type[a] += ', \033[94mCRC fixed\033[0m'
+                # fix CRC for MODELEXT
+                if part_type[a][:13] == 'MODELEXT INFO':
+                    fin = open(in_file, 'r+b')
+                    fin.seek(part_startoffset[a] + 0x36, 0)
+                    fin.write(struct.pack('<H', part_crcCalc[a]))
+                    fin.close()
+                    part_type[a] += ', \033[94mCRC fixed\033[0m'
+                # fix CRC for CKSM
+                if part_type[a][:13] == '\033[93mCKSM\033[0m':
+                    fin = open(in_file, 'r+b')
+                    fin.seek(part_startoffset[a] + 0xC, 0)
+                    fin.write(struct.pack('<I', part_crcCalc[a]))
+                    fin.close()
+                    part_type[a] += ', \033[94mCRC fixed\033[0m'
+                # fix CRC for BCL1
+                if part_type[a][:13] == '\033[93mBCL1\033[0m':
+                    fin = open(in_file, 'r+b')
+                    fin.seek(part_startoffset[a] + 0x4, 0)
+                    fin.write(struct.pack('<H', part_crcCalc[a]))
+                    fin.close()
+                    part_type[a] += ', \033[94mCRC fixed\033[0m'
+        # fix firmware file CRC
         if fixCRC_partID != -1:
             if FW_HDR2 == 1:
                 CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, total_file_size, 0x24)
@@ -2213,6 +2155,37 @@ def main():
                         fin.write(struct.pack('<I', CRC_FW))
                         fin.close()
                         print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
+    # exit не делаем чтобы показать информацию по партициям и где CRC были исправлены
+
+
+    fin.close()
+
+
+
+    # показываем информацию о прошивке
+    # если вообще что-то нашли
+    if partitions_count > 0:
+        # если что-то нашли в dtb то выводим расширенную информацию
+        if len(dtbpart_ID) != 0:
+            print(' -------------------------------------------------- PARTITIONS INFO ---------------------------------------------------')
+            print('|  ID   NAME            START_OFFSET  END_OFFSET         SIZE       ORIG_CRC   CALC_CRC              TYPE              |')
+            print(' ----------------------------------------------------------------------------------------------------------------------')
+            for a in range(partitions_count):
+                if part_crc[a] == part_crcCalc[a]:
+                    print("  %2i    %-15s  0x%08X - 0x%08X     %9i       0x%04X     \033[92m0x%04X\033[0m       %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
+                else:
+                    print("  %2i    %-15s  0x%08X - 0x%08X     %9i       0x%04X     \033[91m0x%04X\033[0m       %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
+            print(" ----------------------------------------------------------------------------------------------------------------------")
+        else:
+            print(" -------------------------------------------------- PARTITIONS INFO ---------------------------------------------------")
+            print("|  ID   START_OFFSET  END_OFFSET         SIZE       ORIG_CRC   CALC_CRC                        TYPE                    |")
+            print(" ----------------------------------------------------------------------------------------------------------------------")
+            for a in range(partitions_count):
+                if part_crc[a] == part_crcCalc[a]:
+                    print("  %2i     0x%08X - 0x%08X     %9i       0x%04X     \033[92m0x%04X\033[0m       %s" % (part_id[a], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
+                else:
+                    print("  %2i     0x%08X - 0x%08X     %9i       0x%04X     \033[91m0x%04X\033[0m       %s" % (part_id[a], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
+            print(" ----------------------------------------------------------------------------------------------------------------------")
 
 
 
