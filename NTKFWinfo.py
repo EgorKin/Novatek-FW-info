@@ -2,11 +2,11 @@
 # NTKFWinfo - python script for work with Novatek firmware files
 # Show full FW info, allow extract/replace/decompress/compress partitions, fix CRC
 #
-# Author: Dex9999(4pda.to user) aka Dex aka EgorKin
+# Copyright © 2022 Dex9999(4pda.to) aka Dex aka EgorKin(GitHub, etc.)
 # ==================================================================================
 
 
-# I suggest use pypy3 (apt install pypy3) for speed up script for LZ77 compression, not python3
+# I suggest use pypy3 (apt install pypy3) for speed-up LZ77 compression, not python3
 
 
 # V2.0 - improve parsing, now support Viofo A139 and 70Mai A500S firmwares
@@ -17,7 +17,7 @@
 # V3.3 - add optional start offset for -u command (uncompress partition); add -x ALL option, also start offset for -x and -u now optional (do not need set it to 0)
 # V3.4 - add ZLIB uncompress support
 # V3.5 - add LZMA uncompress support
-# V3.6 - for -u command: if start offset not defined of 0 - auto skip CKSM header size (0x40 bytes) for CKSM partition
+# V3.6 - for -u command: if start offset not defined or 0 - auto skip CKSM header size (0x40 bytes) for CKSM partition
 # V3.7 - parse UBI volume names
 # V3.8 - for -u command: if start offset not defined - auto skip CKSM header size (0x40 bytes) for CKSM partition; if offset set to 0 - force use 0 (does not use auto skip)
 # V3.9 - extract files from UBI via -u command using ubireader
@@ -31,6 +31,7 @@
 # V4.7 - BCL1 partitions CRC support
 # V4.8 - add -o option for define working dir for output partitions
 # V4.9 - add banner; pre-release version
+# V5.0 - private release
 
 
 import os, struct, sys, argparse, array
@@ -189,7 +190,7 @@ def get_args():
     global is_silent
     global workdir
 
-    p = argparse.ArgumentParser(add_help=True, description='This script works with Novatek firmwares binary file. Show full FW info, allow extract/replace/decompress/compress partitions, fix CRC. Creator: Dex9999(4pda.to user) aka Dex aka EgorKin')
+    p = argparse.ArgumentParser(add_help=True, description='This script works with Novatek firmwares binary file. Show full FW info, allow extract/replace/decompress/compress partitions, fix CRC. Copyright © 2022 Dex9999(4pda.to) aka Dex aka EgorKin(GitHub, etc.)')
     p.add_argument('-i',metavar='filename', nargs=1, help='input file')
     p.add_argument('-x',metavar=('partID', 'offset'), nargs='+', help='extract partition by ID with optional start offset. Or all partitions if partID = ALL')
     p.add_argument('-r',metavar=('partID', 'offset', 'filename'), nargs=3, help='replace partition by ID with start offset using input file')
@@ -410,7 +411,7 @@ def compress_CKSM_BCL(part_nr, in2_file):
     comp_filename = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
     # проверим прошла ли упаковка успешно
     if not os.path.exists(comp_filename):
-        print('\033[91m%s compressed file does not found, exit\033[0m' % in2_file)
+        print('\033[91m%s compressed partition file does not found, exit\033[0m' % comp_filename)
         exit(0)
 
     # hide output print
@@ -504,7 +505,7 @@ def compress_BCL(part_nr, in2_file):
     comp_filename = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
     # проверим прошла ли упаковка успешно
     if not os.path.exists(comp_filename):
-        print('\033[91m%s compressed file does not found, exit\033[0m' % in2_file)
+        print('\033[91m%s compressed partition file does not found, exit\033[0m' % comp_filename)
         exit(0)
 
     # hide output print
@@ -631,7 +632,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
 
         # найдем наименее встречающийся байт среди сжимаемых данных
-        # он будет маркером т.к. маркер кодируется 2 байтами - чем меньше таких символов тем лучше сжатие
+        # он будет маркером т.к. маркер кодируется 2 байтами то чем меньше таких символов тем лучше сжатие
         histogram = []
         for a in range(256):
             histogram.append(0)
@@ -649,6 +650,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         fout.write(struct.pack('>I', 0)) # write packed size, unknown now - rewrite after compression
 
         # Lower values give faster compression, while higher values gives better compression.
+        # 100000 дает байт в байт такое же сжатие как у всех оригинальных прошивок
         LZ_MAX_OFFSET = 100000
 
         outputbuf = bytearray()
@@ -1879,9 +1881,9 @@ def main():
     if is_silent != 1:
         print("===================================================================================")
         print(" \033[92mNTKFWinfo\033[0m - python script for work with Novatek firmware files")
-        print(" Show full FW info, allow extract/replace/decompress/compress partitions, fix CRC")
+        print(" Show full FW \033[93mi\033[0mnfo, allow e\033[93mx\033[0mtract/\033[93mr\033[0meplace/\033[93mu\033[0mncompress/\033[93mc\033[0mompress partitions, \033[93mfixCRC\033[0m")
         print("")
-        print(" Author: \033[93mDex9999\033[0m(4pda.to user) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m")
+        print(" Copyright © 2022 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
         print("===================================================================================")
 
 
