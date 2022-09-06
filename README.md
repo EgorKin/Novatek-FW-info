@@ -57,6 +57,7 @@ python3 ./NTKFWinfo.py -i FWA229A.bin -fixCRC
 ### Use custom directory for input/output partitions files:
 ```
 python3 ./NTKFWinfo.py -i FWA229A.bin -u 6 -o tempdir
+python3 ./NTKFWinfo.py -i FWA229A.bin -c 6 -o tempdir
 ```
 
 ## Speed-up compress BCL1 LZ partitions:
