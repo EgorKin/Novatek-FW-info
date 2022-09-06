@@ -61,8 +61,8 @@ python3 ./NTKFWinfo.py -i FWA229A.bin -c 6 -o tempdir
 ```
 
 ## Speed-up compress BCL1 LZ partitions:
-I suggest use pypy3 VS python3 for increase speed LZ77 compression for BCL1 partitions
+I suggest use pypy3 VS python3 for increase speed LZ77 compression for BCL1 partitions:
 ```
-pypy3 ./NTKFWinfo.py -i FWA229A.bin -c 6
+pypy3 ./NTKFWinfo.py -i GIT3FWv2.3.bin -c 0
 ```
 ![pypy3 speed-up](https://user-images.githubusercontent.com/4955678/188559054-e3ea1152-743b-4686-8a4f-b76c0dd529ba.png)
