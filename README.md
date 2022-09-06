@@ -1,42 +1,67 @@
-# Novatek-FW-info
-Python script for work with Novatek binary firmwares - get info, modify...
-![Безымянный](https://user-images.githubusercontent.com/4955678/184808463-1b5d62b6-eb76-41d9-a75a-dbd019e8f60f.png)
-![Безымянный2](https://user-images.githubusercontent.com/4955678/184808917-48616d07-9d85-4656-9c44-ca424bc82cca.png)
+# Novatek Firmware info (NTKFWinfo)
+Python script for work with Novatek firmware files. Show full FW info, allow extract, replace, decompress, compress partitions, fix CRC for modded partitions and whole firmware file. Useful tool for building custom firmwares.
 
-Require install few python modules:
-sudo apt-get install mtd-utils
+![Безымянный](https://user-images.githubusercontent.com/4955678/184808463-1b5d62b6-eb76-41d9-a75a-dbd019e8f60f.png)
+![NTKFWinfo2](https://user-images.githubusercontent.com/4955678/188560457-54a2b532-61db-4ca8-9b3c-c4916cae1c62.png)
+
+
+## Installation
+**First of all install:**
+```
 sudo apt-get install python3
-sudo apt-get install liblzo2-dev
 sudo apt-get install python3-pip
+sudo apt-get install mtd-utils
+sudo apt-get install liblzo2-dev
+sudo apt-get install pypy3
+```
+**Next install this python modules:**
+```
 sudo pip install python-lzo
 sudo pip install ubi_reader
+```
+**For SPARSE partitions support install:**
+```
+sudo apt-get install simg2img
+sudo apt-get install android-tools-fsutils
+```
 
+## Basic usage:
 
-How to use:
+### Show firmware partitions info:
+```
+python3 ./NTKFWinfo.py -i FWA229A.bin
+```
+### Uncompress partition by ID to file(for BCL1) or folder(for UBI or SPARSE):
+```
+python3 ./NTKFWinfo.py -i FWA229A.bin -u 6
+```
+### Compress partition back to firmware file from file(for BCL1) or folder(for UBI or SPARSE) and fix CRC:
+```
+python3 ./NTKFWinfo.py -i FWA229A.bin -c 6
+```
 
-Get firmware partitions info:
-python3 ./FWinfo.py -i FWA229A-0623.bin
+## Additional(expert) usage:
+### Extract partition by ID number and skip n start bytes:
+(as example extract data from CKSM partition require skip first 64 CKSM-header bytes)
+```
+python3 ./NTKFWinfo.py -i FWA229A.bin -x 6 64
+```
+### Replace partition with ID=6 and start offset = 64 (CKSM-header size) using file img-726660551.ubi:
+```
+python3 ./NTKFWinfo.py -i FWA229A.bin -r 6 64 ./img-726660551.ubi
+```
+### Fix CRC for all known partitions(uboot, MODELEXT INFO, BCL1, CKSM) and whole firmware file:
+```
+python3 ./NTKFWinfo.py -i FWA229A.bin -fixCRC
+```
+### Use custom directory for input/output partitions files:
+```
+python3 ./NTKFWinfo.py -i FWA229A.bin -u 6 -o tempdir
+```
 
-Extract partition by ID number and skip n start bytes:
-(extract data from CKSM partition require skip 64 CKSM-header bytes.
-python3 ./FWinfo.py -i FWA229A-0623.bin -x 6 64
-
-Replace partition data with ID=6 and start offset = 64 (CKSM header size) using file img-726660551.ubi:
-python3 ./FWinfo.py -i FWA229A-0623.bin -r 6 64 ./img-726660551.ubi
-
-Fix CRC for uboot and CKSM partitions:
-python3 ./FWinfo.py -i FWA229A-0623.bin -fixCRC
-
-
--------------------------------------------------------------------------------------------------------------------------
-
-
-You may also extract all files from UBIFS exctracted from CKSM using ubi-reader:
-ubireader_extract_files -k -i -f FWA229A-0623.bin-partitionID6
-
-Modify something and compile back to UBI:
-1) ubireader_utils_info FWA229A-0623.bin-partitionID6
-2) remove line with "vol_flags = 0" in file ./ubifs-root/FWA229A-0623.bin-partitionID6/img-726660551/img-726660551.ini
-3) chmod +x ./ubifs-root/FWA229A-0623.bin-partitionID6/img-726660551/create_ubi_img-726660551.sh
-4) ./ubifs-root/FWA229A-0623.bin-partitionID6/img-726660551/create_ubi_img-726660551.sh ./ubifs-root/726660551/rootfs
-
+## Speed-up compress BCL1 LZ partitions:
+I suggest use pypy3 VS python3 for increase speed LZ77 compression for BCL1 partitions
+```
+pypy3 ./NTKFWinfo.py -i FWA229A.bin -c 6
+```
+![pypy3 speed-up](https://user-images.githubusercontent.com/4955678/188559054-e3ea1152-743b-4686-8a4f-b76c0dd529ba.png)
