@@ -1,6 +1,6 @@
 # ==================================================================================
 # NTKFWinfo - python script for work with Novatek firmware files
-# Show full FW info, allow extract/replace/decompress/compress partitions, fix CRC
+# Show full FW info, allow extract/replace/uncompress/compress partitions, fix CRC
 #
 # Copyright © 2022 Dex9999(4pda.to) aka Dex aka EgorKin(GitHub, etc.)
 # ==================================================================================
@@ -190,7 +190,7 @@ def get_args():
     global is_silent
     global workdir
 
-    p = argparse.ArgumentParser(add_help=True, description='This script works with Novatek firmwares binary file. Show full FW info, allow extract/replace/decompress/compress partitions, fix CRC. Copyright © 2022 Dex9999(4pda.to) aka Dex aka EgorKin(GitHub, etc.)')
+    p = argparse.ArgumentParser(add_help=True, description='This script works with Novatek firmwares binary file. Show full FW info, allow extract/replace/uncompress/compress partitions, fix CRC. Copyright © 2022 Dex9999(4pda.to) aka Dex aka EgorKin(GitHub, etc.)')
     p.add_argument('-i',metavar='filename', nargs=1, help='input file')
     p.add_argument('-x',metavar=('partID', 'offset'), nargs='+', help='extract partition by ID with optional start offset. Or all partitions if partID = ALL')
     p.add_argument('-r',metavar=('partID', 'offset', 'filename'), nargs=3, help='replace partition by ID with start offset using input file')
@@ -1023,7 +1023,7 @@ def BCL1_uncompress(in_offset, out_filename):
         # для вывода прогресса работы
         #oldcurrprogress = 0
         
-        # Main decompression loop
+        # Main uncompression loop
         outpos = 0;
         while((inpos < insize) & (outpos < outsize)):
             symbol = struct.unpack('B', fin.read(1))[0]
