@@ -1,11 +1,11 @@
 # Novatek Firmware info (NTKFWinfo)
-Python script for work with Novatek firmware files. Show full FW info, allow extract, replace, decompress, compress partitions, fix CRC for modded partitions and whole firmware file. Useful tool for building custom firmwares.
+Python script for work with Novatek firmware files. Show full FW info, allow extract, replace, uncompress, compress partitions, fix CRC for modded partitions and whole firmware file. Useful tool for building custom firmwares.
 
 ![Безымянный](https://user-images.githubusercontent.com/4955678/184808463-1b5d62b6-eb76-41d9-a75a-dbd019e8f60f.png)
 ![NTKFWinfo2](https://user-images.githubusercontent.com/4955678/188560457-54a2b532-61db-4ca8-9b3c-c4916cae1c62.png)
 
 
-## Installation
+## Installation:
 **First of all install:**
 ```
 sudo apt-get install python3
@@ -40,7 +40,7 @@ python3 ./NTKFWinfo.py -i FWA229A.bin -u 6
 python3 ./NTKFWinfo.py -i FWA229A.bin -c 6
 ```
 
-## Additional(expert) usage:
+## Additional(expert) commands:
 ### Extract partition by ID number and skip n start bytes:
 (as example extract data from CKSM partition require skip first 64 CKSM-header bytes)
 ```
@@ -61,7 +61,7 @@ python3 ./NTKFWinfo.py -i FWA229A.bin -c 6 -o tempdir
 ```
 
 ## Speed-up compress BCL1 LZ partitions:
-I suggest use pypy3 VS python3 for increase speed LZ77 compression for BCL1 partitions:
+I suggest use pypy3 VS python3 for increase speed compression for BCL1 LZ partitions:
 ```
 pypy3 ./NTKFWinfo.py -i GIT3FWv2.3.bin -c 0
 ```
