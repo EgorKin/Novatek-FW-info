@@ -32,6 +32,7 @@
 # V4.8 - add -o option for define working dir for output partitions
 # V4.9 - add banner; pre-release version
 # V5.0 - private release
+# V5.1 - add FDT(DTB) partition uncompress/compress support
 
 
 import os, struct, sys, argparse, array
@@ -524,6 +525,47 @@ def compress_BCL(part_nr, in2_file):
 
 
 
+def compress_FDT(part_nr, in2_file):
+    global in_file
+    
+    fin = open(in_file, 'rb')
+    fin.seek(part_startoffset[part_nr], 0)
+
+    FourCC = fin.read(4)
+    if struct.unpack('>I', FourCC)[0] != 0xD00DFEED:
+        print('\033[91mNot FDT(DTB) partition, exit\033[0m')
+        exit(0)
+
+    # для FDT(DTB) на вход должен подаваться файл
+    if not os.path.exists(in2_file):
+        print('\033[91m%s file does not found, exit\033[0m' % in2_file)
+        exit(0)
+
+    # compress uncomp_partitionID to comp_partitionID
+    comp_filename = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
+    os.system('sudo dtc -qq -I dts -O dtb ' + in2_file + ' -o ' + comp_filename)
+
+    # проверим прошла ли упаковка успешно
+    if not os.path.exists(comp_filename):
+        print('\033[91m%s compressed partition file does not found, exit\033[0m' % comp_filename)
+        exit(0)
+
+    # hide output print
+    global is_silent
+    is_silent = 1
+
+    # replace partition
+    partition_replace(part_id[part_nr], 0, comp_filename)
+    
+    # delete comp_partitionID file
+    subprocess.run('rm -rf ' + comp_filename, shell=True)
+
+    # fix CRC
+    is_silent = 0
+    fixCRC(part_id[part_nr])
+
+
+
 def compress(part_nr, in2_file):
     global in_file
 
@@ -558,6 +600,12 @@ def compress(part_nr, in2_file):
         if FourCC == b'BCL1':
             fin.close()
             compress_BCL(part_nr, in2_file)
+            return
+
+        # FDT(DTB)
+        if struct.unpack('>I', FourCC)[0] == 0xD00DFEED:
+            fin.close()
+            compress_FDT(part_nr, in2_file)
             return
 
     print("\033[91mThis partition type is not supported for compression\033[0m")
@@ -925,6 +973,24 @@ def uncompress(in_offset, out_filename, size):
     FourCC = fin.read(4)
 
 
+    # FDT (DTB)
+    if struct.unpack('>I', FourCC)[0] == 0xD00DFEED:
+        #extract FDT partition to tempfile
+        fin.seek(in_offset, 0)
+        finread = fin.read(size)
+        fin.close()
+        fpartout = open(out_filename + '_tempfile', 'w+b')
+        fpartout.write(finread)
+        fpartout.close()
+        
+        #unpack DTB to DTS
+        os.system('sudo dtc -qqq -I dtb -O dts ' + out_filename + '_tempfile' + ' -o ' + out_filename)
+        
+        # delete tempfile
+        os.system('rm -rf ' + out_filename + '_tempfile')
+        return
+
+
     if FourCC == b'BCL1':
         fin.close()
         BCL1_uncompress(in_offset, out_filename)
@@ -975,7 +1041,7 @@ def uncompress(in_offset, out_filename, size):
         os.system('rm -rf ' + out_filename + '/tempfile')
         return
 
-    print("\033[91mBCL1 or UBI# or SPARSE markers not found, exit\033[0m")
+    print("\033[91mDTB or BCL1 or UBI# or SPARSE markers not found, exit\033[0m")
     fin.close()
 
 
