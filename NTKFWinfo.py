@@ -1041,7 +1041,7 @@ def uncompress(in_offset, out_filename, size):
         os.system('rm -rf ' + out_filename + '/tempfile')
         return
 
-    print("\033[91mDTB or BCL1 or UBI# or SPARSE markers not found, exit\033[0m")
+    print("\033[91mFDT(DTB) or BCL1 or UBI# or SPARSE markers not found, exit\033[0m")
     fin.close()
 
 
