@@ -24,7 +24,10 @@ sudo pip install ubi_reader
 sudo apt-get install simg2img
 sudo apt-get install android-tools-fsutils
 ```
-
+**For FDT(DTB) partitions support install:**
+```
+sudo apt-get install device-tree-compiler
+```
 ## Basic usage:
 
 ### Show firmware partitions info:
