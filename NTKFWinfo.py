@@ -644,18 +644,18 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
     # с BCL1 в плане CRC всё интересно - есть CRC в заголовке BCL1 по смещению 0x4 который расчитывается в самом конце уже после сжатия
     # а ещё есть CRC несжатых данных:
-    #   если по смещению 0x6C лежат FFFF то CRC_offset = 0x46E
+    #   если по смещению 0x6C лежат FFFF то CRC_offset = 0x46E - пока что отменил это из-за Viofo FW 139
     # а если по смещению 0x6C лежат 55AA то CRC_offset = 0x6E
     # и этот CRC нужно расчитать и записать до того как начать сжатие в BCL1
-    if (dataread[0x6C] == 0xFF) & (dataread[0x6D] == 0xFF):
-        newCRC = MemCheck_CalcCheckSum16Bit(in2_file, 0, len(dataread), 0x46E)
-        dataread[0x46E] = (newCRC & 0xFF)
-        dataread[0x46F] = ((newCRC >> 8) & 0xFF)
-    else:
-        if (dataread[0x6C] == 0x55) & (dataread[0x6D] == 0xAA):
-            newCRC = MemCheck_CalcCheckSum16Bit(in2_file, 0, len(dataread), 0x6E)
-            dataread[0x6E] = (newCRC & 0xFF)
-            dataread[0x6F] = ((newCRC >> 8) & 0xFF)
+    ##if (dataread[0x6C] == 0xFF) & (dataread[0x6D] == 0xFF):
+    ##    newCRC = MemCheck_CalcCheckSum16Bit(in2_file, 0, len(dataread), 0x46E)
+    ##    dataread[0x46E] = (newCRC & 0xFF)
+    ##    dataread[0x46F] = ((newCRC >> 8) & 0xFF)
+    ##else:
+    if (dataread[0x6C] == 0x55) & (dataread[0x6D] == 0xAA):
+        newCRC = MemCheck_CalcCheckSum16Bit(in2_file, 0, len(dataread), 0x6E)
+        dataread[0x6E] = (newCRC & 0xFF)
+        dataread[0x6F] = ((newCRC >> 8) & 0xFF)
 
     # LZ77 compress
     if Algorithm == 0x09:
@@ -760,10 +760,10 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                 ((bestlength == 6) & (bestoffset <= 0x001fffff)) |
                 ((bestlength == 7) & (bestoffset <= 0x0fffffff)) ):
                     outputbuf.append(marker)
-                    #print("0x%02X" % marker)
+                    #print("0x%08X : 0x%02X" % (outpos, marker))
                     outpos += 1
                     
-                    #print("length = %d" % bestlength)
+                    #print("length = 0x%02X" % bestlength)
                     ##outpos += _LZ_WriteVarSize( bestlength, &out[ outpos ] )
                     buf = 0
                     y = bestlength >> 3;
@@ -784,14 +784,15 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                         i -= 1
                     # Return number of bytes written
                     outpos += num_bytes
-                    #print("num_bytes = %d" % num_bytes)
-                    #print("buf = %d" % buf)
+                    #print("wite num_bytes = %d" % num_bytes)
+                    #print("write buf: ")
                     
                     while num_bytes > 0:
+                        #print("0x%02X" % ((buf>>(8*(num_bytes - 1)))&0xFF))
                         outputbuf.append((buf>>(8*(num_bytes - 1)))&0xFF)
                         num_bytes -= 1
                     
-                    #print("offset = %d" % bestoffset)
+                    #print("offset = 0x%02X" % bestoffset)
                     ##outpos += _LZ_WriteVarSize( bestoffset, &out[ outpos ] )
                     buf = 0
                     y = bestoffset >> 3;
@@ -812,10 +813,11 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                         i -= 1
                     # Return number of bytes written
                     outpos += num_bytes
-                    #print("num_bytes = %d" % num_bytes)
-                    #print("buf = %d" % buf)
+                    #print("write num_bytes = %d" % num_bytes)
+                    #print("write buf: ")
                     
                     while num_bytes > 0:
+                        #print("0x%02X" % ((buf>>(8*(num_bytes - 1)))&0xFF))
                         outputbuf.append((buf>>(8*(num_bytes - 1)))&0xFF)
                         num_bytes -= 1
                     
@@ -857,12 +859,10 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
         fout.write(outputbuf)
         # нашел упоминание что надо бы дописать к данным 00 для выравнивания по 4 байтам
-        # но делаю это только если нулевая партиция (без этого адрес начала NVTPACK_FW_HDR будет не выровнен)
         addsize = 0
-        if part_id[part_nr] == 0:
-            addsize = (len(outputbuf) % 4)
-            if addsize != 0:
-                addsize = 4 - addsize
+        addsize = (len(outputbuf) % 4)
+        if addsize != 0:
+            addsize = 4 - addsize
         # добавим сколько надо 00 для выравнивания до 4 байт
         for b in range(addsize):
             fout.write(struct.pack('B', 0))
