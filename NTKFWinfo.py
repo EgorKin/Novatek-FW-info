@@ -628,8 +628,10 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
     # skip old CRC 2 bytes
     oldCRC = fin.read(2)
+    
     # check compression algo
     Algorithm = struct.unpack('>H', fin.read(2))[0]
+    
     if (Algorithm != 0x09) & (Algorithm != 0x0B) & (Algorithm != 0x0C):
         print("\033[91mCompression algo %0X is not supported\033[0m" % Algorithm)
         sys.exit(1)
@@ -638,6 +640,8 @@ def BCL1_compress(part_nr, in_offset, in2_file):
     if (Algorithm == 0x0B):
         fin.seek(part_startoffset[part_nr] + in_offset + 0x11, 0)
         LZMA_DictSize = struct.unpack('<I', fin.read(4))[0]
+        LZMA_UncompSize1 = struct.unpack('<I', fin.read(4))[0]
+        LZMA_UncompSize2 = struct.unpack('<I', fin.read(4))[0]
 
     out = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
 
@@ -907,14 +911,11 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         #print("LZMA_DictSize=0x%08X" % LZMA_DictSize)
 
         # lzma.exe e -a1 -d20 -mfbt4 -fb40 -mc36 -lc3 -lp0 -pb2 infile outfile
-        fast_bytes = 40
-        search_depth = 16 + fast_bytes//2 # depth search for MF_BT*
-        my_filters = [{"id": lzma.FILTER_LZMA1, "mode": lzma.MODE_NORMAL, "dict_size": LZMA_DictSize, "mf": lzma.MF_BT4, "nice_len": fast_bytes, "depth": search_depth}]
-        #lzc = lzma.LZMACompressor(format = lzma.FORMAT_ALONE, filters = my_filters)
-        #compress = lzc.compress(dataread)
-        # если использовать lzma.LZMACompressor то нужно еще fout.write(lzc.flush())
+        ##fast_bytes = 40
+        ##search_depth = 16 + fast_bytes//2 # depth search формула для любого из MF_BT*
+        ##my_filters = [{"id":lzma.FILTER_LZMA1, "mode":lzma.MODE_NORMAL, "dict_size":LZMA_DictSize, "mf":lzma.MF_BT4, "nice_len":fast_bytes, "depth":search_depth, "lc":3, "lp":0, "pb":2}]
 
-        #compress = lzma.compress(dataread, format = lzma.FORMAT_ALONE, filters = my_filters) - пока filters не работает с pypy3
+        ##compress = lzma.compress(dataread, format = lzma.FORMAT_ALONE, filters = my_filters) # но пока что filters не работает с pypy3
         compress = lzma.compress(dataread, format = lzma.FORMAT_ALONE)
 
         # надо дописать к сжатым данным 00... для выравнивания по 4 байтам
@@ -940,11 +941,16 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         fout.close()
 
         # исправим в LZMA заголовке данные о Unpacked size - в LZMA-библиотеке python они всегда записываются как FF FF FF FF
-        fout = open(out, 'r+b')
-        fout.seek(0x15, 0)
-        fout.write(struct.pack('<I', len(dataread)))
-        fout.write(struct.pack('<I', len(dataread)))
-        fout.close()
+        # в стандарте указано что это одно 64-битное число но во всех прошивках идет дублирование 2-х 32-битных чисел
+        ##fout = open(out, 'r+b')
+        ##fout.seek(0x15, 0)
+        ##if (LZMA_UncompSize1 == LZMA_UncompSize2):
+        ##    # если дублирование
+        ##    fout.write(struct.pack('<II', len(dataread), len(dataread)))
+        ##else:
+        ##    # если по стандарту 64 бита
+        ##    fout.write(struct.pack('<II', len(dataread)&0xFFFFFFFF, (len(dataread)>>32)&0xFFFFFFFF))
+        ##fout.close()
 
         # пересчитываем CRC для BCL1-заголовка только после того как все остальное кроме CRC уже записали
         newCRC = MemCheck_CalcCheckSum16Bit(out, 0, len(compress) + addsize + 0x10, 0x4) # было
