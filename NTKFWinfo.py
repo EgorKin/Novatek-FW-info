@@ -33,7 +33,6 @@
 # V4.9 - add banner; pre-release version
 # V5.0 - private release
 # V5.1 - add FDT(DTB) partition uncompress/compress support
-# V5.2 - BCL1 LZ77 compatibility improvements, BCL1 LZMA DictionarySize support WIP
 
 
 import os, struct, sys, argparse, array
@@ -628,20 +627,12 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
     # skip old CRC 2 bytes
     oldCRC = fin.read(2)
-    
     # check compression algo
     Algorithm = struct.unpack('>H', fin.read(2))[0]
-    
     if (Algorithm != 0x09) & (Algorithm != 0x0B) & (Algorithm != 0x0C):
         print("\033[91mCompression algo %0X is not supported\033[0m" % Algorithm)
         sys.exit(1)
 
-    # read LZMA Dictionary size - 4 байта в заголовке LZMA
-    if (Algorithm == 0x0B):
-        fin.seek(part_startoffset[part_nr] + in_offset + 0x11, 0)
-        LZMA_DictSize = struct.unpack('<I', fin.read(4))[0]
-        LZMA_UncompSize1 = struct.unpack('<I', fin.read(4))[0]
-        LZMA_UncompSize2 = struct.unpack('<I', fin.read(4))[0]
 
     out = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
 
@@ -651,13 +642,12 @@ def BCL1_compress(part_nr, in_offset, in2_file):
     dataread = bytearray(fin.read())
     fin.close()
 
-    # с BCL1 в плане CRC всё интересно - есть CRC в заголовке BCL1 по смещению 0x4 который расчитывается в самом конце уже после сжатия данных
+    # с BCL1 в плане CRC всё интересно - есть CRC в заголовке BCL1 по смещению 0x4 который расчитывается в самом конце уже после сжатия
     # а ещё есть CRC несжатых данных:
-    #   если по смещению 0x6C лежат FFFF а по 0x46C лежат 55AA то CRC_offset = 0x46E - изменил это из-за Viofo FW139, ввел доп. условие
+    #   если по смещению 0x6C лежат FFFF то CRC_offset = 0x46E
     # а если по смещению 0x6C лежат 55AA то CRC_offset = 0x6E
-    # иначе нет CRC для несжатых данных
     # и этот CRC нужно расчитать и записать до того как начать сжатие в BCL1
-    if (dataread[0x6C] == 0xFF) & (dataread[0x6D] == 0xFF) & (dataread[0x46C] == 0x55) & (dataread[0x46D] == 0xAA):
+    if (dataread[0x6C] == 0xFF) & (dataread[0x6D] == 0xFF):
         newCRC = MemCheck_CalcCheckSum16Bit(in2_file, 0, len(dataread), 0x46E)
         dataread[0x46E] = (newCRC & 0xFF)
         dataread[0x46F] = ((newCRC >> 8) & 0xFF)
@@ -697,15 +687,15 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         for a in range(len(dataread)):
             histogram[int(dataread[a])] += 1
         marker = histogram.index(min(histogram))
-        #print("new marker byte = 0x%02X" % marker)
+        #print("new marker = 0x%02X" % marker)
 
 
         fout = open(out, 'w+b')
         fout.write(struct.pack('>I', 0x42434C31)) # write BCL1
-        fout.write(struct.pack('<H', 0x0000)) # write new CRC, unknown now - rewrite on step 2 after compression
+        fout.write(struct.pack('<H', 0x0000)) # write new CRC, unknown now - rewrite after compression
         fout.write(struct.pack('>H', Algorithm)) # write Algorithm
         fout.write(struct.pack('>I', insize)) # write unpacked size
-        fout.write(struct.pack('>I', 0)) # write packed size, unknown now - rewrite on step 1 after compression
+        fout.write(struct.pack('>I', 0)) # write packed size, unknown now - rewrite after compression
 
         # Lower values give faster compression, while higher values gives better compression.
         # 100000 дает байт в байт такое же сжатие как у всех оригинальных прошивок
@@ -718,7 +708,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         # для вывода прогресса работы
         oldcurrprogress = 0
 
-        # Write marker byte as first symbol for the decoder
+        # Remember the marker symbol for the decoder
         outputbuf.append(marker)
         #print("0x%02X" % marker)
 
@@ -727,20 +717,14 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         outpos = 1
 
         # Main compression loop
-        bytesleft = insize
+        bytesleft = insize - 1
         while bytesleft > 3:
             # Search history window for maximum length string match
             bestlength = 3
             bestoffset = 0
-
+            
             j = work[ 65536 + inpos ]
             while (j != 0xffffffff) & ((inpos - j) < LZ_MAX_OFFSET):
-
-                # защита от выхода за пределы массива dataread[]
-                if (j + bestlength >= insize):
-                    break
-                if (inpos + bestlength >= insize):
-                    break
 
                 # Quickly determine if this is a candidate (for speed)
                 if dataread[ j + bestlength ] == dataread[ inpos + bestlength ]:
@@ -750,12 +734,12 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                         maxlength = bytesleft
                     else:
                         maxlength = offset
-
+                        
                     # Count maximum length match at this offset
                     #length = _LZ_StringCompare( ptr1, ptr2, 2, maxlength );
                     length = 2
                     while (length < maxlength):
-                        if (dataread[ inpos + length ] == dataread[ j + length ]):
+                        if (dataread[ inpos + length ] == dataread[ j + length]):
                             length += 1
                         else:
                             break
@@ -776,10 +760,10 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                 ((bestlength == 6) & (bestoffset <= 0x001fffff)) |
                 ((bestlength == 7) & (bestoffset <= 0x0fffffff)) ):
                     outputbuf.append(marker)
-                    #print("0x%08X : 0x%02X" % (outpos, marker))
+                    #print("0x%02X" % marker)
                     outpos += 1
-
-                    #print("length = 0x%08X" % bestlength)
+                    
+                    #print("length = %d" % bestlength)
                     ##outpos += _LZ_WriteVarSize( bestlength, &out[ outpos ] )
                     buf = 0
                     y = bestlength >> 3;
@@ -800,15 +784,14 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                         i -= 1
                     # Return number of bytes written
                     outpos += num_bytes
-                    #print("wite num_bytes = %d" % num_bytes)
-                    #print("write buf: ")
-
+                    #print("num_bytes = %d" % num_bytes)
+                    #print("buf = %d" % buf)
+                    
                     while num_bytes > 0:
-                        #print("0x%02X" % ((buf>>(8*(num_bytes - 1)))&0xFF))
                         outputbuf.append((buf>>(8*(num_bytes - 1)))&0xFF)
                         num_bytes -= 1
-
-                    #print("offset = 0x%08X" % bestoffset)
+                    
+                    #print("offset = %d" % bestoffset)
                     ##outpos += _LZ_WriteVarSize( bestoffset, &out[ outpos ] )
                     buf = 0
                     y = bestoffset >> 3;
@@ -829,14 +812,13 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                         i -= 1
                     # Return number of bytes written
                     outpos += num_bytes
-                    #print("write num_bytes = %d" % num_bytes)
-                    #print("write buf: ")
-
+                    #print("num_bytes = %d" % num_bytes)
+                    #print("buf = %d" % buf)
+                    
                     while num_bytes > 0:
-                        #print("0x%02X" % ((buf>>(8*(num_bytes - 1)))&0xFF))
                         outputbuf.append((buf>>(8*(num_bytes - 1)))&0xFF)
                         num_bytes -= 1
-
+                    
                     inpos += bestlength
                     bytesleft -= bestlength
             else:
@@ -857,7 +839,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
             if currprogress > oldcurrprogress:
                 updateProgressBar(currprogress)
                 oldcurrprogress = currprogress
-
+            
         # Dump remaining bytes, if any
         while inpos < insize:
             if dataread[ inpos ] == marker:
@@ -874,32 +856,29 @@ def BCL1_compress(part_nr, in_offset, in2_file):
             inpos += 1
 
         fout.write(outputbuf)
-
-        # надо дописать к сжатым данным 00... для выравнивания по 4 байтам
-        # для всех новых прошивок или более старой версии прошивок (BCL1 + NVTPACK_FW_HDR) для самой первой партиции или для просто прошивки из одного BCL1
+        # нашел упоминание что надо бы дописать к данным 00 для выравнивания по 4 байтам
+        # но делаю это только если нулевая партиция (без этого адрес начала NVTPACK_FW_HDR будет не выровнен)
         addsize = 0
-        if (FW_HDR2 == 1) | ((FW_HDR == 1) & (part_id[part_nr] == 0)) | (FW_HDR == 0):
-            addsize = (outpos % 4)
+        if part_id[part_nr] == 0:
+            addsize = (len(outputbuf) % 4)
             if addsize != 0:
                 addsize = 4 - addsize
-                
-                # добавим сколько надо 00 для выравнивания до 4 байт
-                for b in range(addsize):
-                    fout.write(struct.pack('B', 0))
-                outpos += addsize
+        # добавим сколько надо 00 для выравнивания до 4 байт
+        for b in range(addsize):
+            fout.write(struct.pack('B', 0))
         fout.close()
-        #print("Compression to LZ BCL1 successfull")
 
+        #print("Compression to LZ BCL1 successfull")
         fout = open(out, 'r+b')
         fout.seek(12, 0)
-        fout.write(struct.pack('>I', outpos)) # write compressed data size to BCL1 header
+        fout.write(struct.pack('>I', outpos + addsize)) # write packed size
         fout.close()
 
         endT = datetime.now()
         print("elapsed: %s" % str(endT - startT))
 
         # пересчитываем CRC для BCL1-заголовка только после того как все остальное кроме CRC уже записали
-        newCRC = MemCheck_CalcCheckSum16Bit(out, 0, outpos + 16, 0x4)
+        newCRC = MemCheck_CalcCheckSum16Bit(out, 0, outpos + addsize + 0x10, 0x4)
         fout = open(out, 'r+b')
         fout.seek(4, 0)
         fout.write(struct.pack('<H', newCRC)) # write new CRC value
@@ -908,17 +887,9 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
     # LZMA compress
     if Algorithm == 0x0B:
-        #print("LZMA_DictSize=0x%08X" % LZMA_DictSize)
+        compress = lzma.compress(dataread, lzma.FORMAT_ALONE)
 
-        # lzma.exe e -a1 -d20 -mfbt4 -fb40 -mc36 -lc3 -lp0 -pb2 infile outfile
-        ##fast_bytes = 40
-        ##search_depth = 16 + fast_bytes//2 # depth search формула для любого из MF_BT*
-        ##my_filters = [{"id":lzma.FILTER_LZMA1, "mode":lzma.MODE_NORMAL, "dict_size":LZMA_DictSize, "mf":lzma.MF_BT4, "nice_len":fast_bytes, "depth":search_depth, "lc":3, "lp":0, "pb":2}]
-
-        ##compress = lzma.compress(dataread, format = lzma.FORMAT_ALONE, filters = my_filters) # но пока что filters не работает с pypy3
-        compress = lzma.compress(dataread, format = lzma.FORMAT_ALONE)
-
-        # надо дописать к сжатым данным 00... для выравнивания по 4 байтам
+        # нашел упоминание что надо бы дописать к данным 00 для выравнивания по 4 байтам
         # но делаю это только если нулевая партиция (без этого NVTPACK_FW_HDR будет не выровнен)
         addsize = 0
         if part_id[part_nr] == 0:
@@ -932,28 +903,15 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         fout.write(struct.pack('>H', Algorithm)) # write Algorithm
         fout.write(struct.pack('>I', len(dataread))) # write unpacked size
         fout.write(struct.pack('>I', len(compress) + addsize)) # write packed size
-
-        fout.write(compress) # write compressed data
+        fout.write(compress) # write data
 
         # добавим сколько надо 00 для выравнивания до 4 байт
         for b in range(addsize):
             fout.write(struct.pack('B', 0))
         fout.close()
 
-        # исправим в LZMA заголовке данные о Unpacked size - в LZMA-библиотеке python они всегда записываются как FF FF FF FF
-        # в стандарте указано что это одно 64-битное число но во всех прошивках идет дублирование 2-х 32-битных чисел
-        ##fout = open(out, 'r+b')
-        ##fout.seek(0x15, 0)
-        ##if (LZMA_UncompSize1 == LZMA_UncompSize2):
-        ##    # если дублирование
-        ##    fout.write(struct.pack('<II', len(dataread), len(dataread)))
-        ##else:
-        ##    # если по стандарту 64 бита
-        ##    fout.write(struct.pack('<II', len(dataread)&0xFFFFFFFF, (len(dataread)>>32)&0xFFFFFFFF))
-        ##fout.close()
-
         # пересчитываем CRC для BCL1-заголовка только после того как все остальное кроме CRC уже записали
-        newCRC = MemCheck_CalcCheckSum16Bit(out, 0, len(compress) + addsize + 0x10, 0x4) # было
+        newCRC = MemCheck_CalcCheckSum16Bit(out, 0, len(compress) + addsize + 0x10, 0x4)
         fout = open(out, 'r+b')
         fout.seek(4, 0)
         fout.write(struct.pack('<H', newCRC)) # write new CRC value
@@ -964,7 +922,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
     if Algorithm == 0x0C:
         compress = zlib.compress(dataread)
 
-        # надо дописать к сжатым данным 00... для выравнивания по 4 байтам
+        # нашел упоминание что надо бы дописать к данным 00 для выравнивания по 4 байтам
         # но делаю это только если нулевая партиция (без этого NVTPACK_FW_HDR будет не выровнен)
         addsize = 0
         if part_id[part_nr] == 0:
@@ -978,8 +936,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         fout.write(struct.pack('>H', Algorithm)) # write Algorithm
         fout.write(struct.pack('>I', len(dataread))) # write unpacked size
         fout.write(struct.pack('>I', len(compress) + addsize)) # write packed size
-        
-        fout.write(compress) # write compressed data
+        fout.write(compress) # write data
 
         # добавим сколько надо 00 для выравнивания до 4 байт
         for b in range(addsize):
@@ -1272,10 +1229,10 @@ def fillIDPartNames(startat):
     while(starting == 0x00000001):
         #вычисляем длину id
         id_length = 0
-        t = struct.unpack('b', fin.read(1))[0]
+        t = struct.unpack('B', fin.read(1))[0]
         while(t != 0x00):
             id_length+=1
-            t = struct.unpack('b', fin.read(1))[0]
+            t = struct.unpack('B', fin.read(1))[0]
         #print(id_length)
         fin.seek(-1*(id_length+1), 1) # вернемся на начало имени id
         # считаем idx
@@ -1412,7 +1369,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
         # Operating System
         fin.seek(start_offset + 28, 0)
-        temp = struct.unpack('b', fin.read(1))[0]
+        temp = struct.unpack('B', fin.read(1))[0]
         if temp in uImage_os:
             temp_parttype += ', OS: ' + '\"\033[93m' + uImage_os[temp] + '\033[0m\"'
         else:
@@ -1420,7 +1377,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
         # CPU architecture
         #fin.seek(part_offset[2] + 29, 0)
-        temp = struct.unpack('b', fin.read(1))[0]
+        temp = struct.unpack('B', fin.read(1))[0]
         if temp in uImage_arch:
             temp_parttype += ', CPU: ' + '\"\033[93m' + uImage_arch[temp] + '\033[0m\"'
         else:
@@ -1428,7 +1385,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
         # Image Type
         #fin.seek(part_offset[2] + 30, 0)
-        temp = struct.unpack('b', fin.read(1))[0]
+        temp = struct.unpack('B', fin.read(1))[0]
         if temp in uImage_imagetype:
             temp_parttype += ', Image type: ' + '\"\033[93m' + uImage_imagetype[temp] + '\033[0m\"'
         else:
@@ -1436,7 +1393,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
         # Compression Type
         #fin.seek(part_offset[2] + 31, 0)
-        temp = struct.unpack('b', fin.read(1))[0]
+        temp = struct.unpack('B', fin.read(1))[0]
         if temp in uImage_compressiontype:
             temp_parttype += ', Compression type: ' + '\"\033[93m' + uImage_compressiontype[temp] + '\033[0m\"'
         else:
@@ -1448,8 +1405,12 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
         # Image Creation Timestamp
         fin.seek(start_offset + 8, 0)
-        ts = struct.unpack('>I', fin.read(4))[0]
-        temp_parttype += ', created: ' + '\"\033[93m' + datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S') + '\033[0m\"'
+        temp = struct.unpack('>I', fin.read(4))[0]
+        temp_parttype += ', created: ' + '\"\033[93m' + datetime.utcfromtimestamp(temp).strftime('%Y-%m-%d %H:%M:%S') + '\033[0m\"'
+
+        # Image Data Size
+        temp = struct.unpack('>I', fin.read(4))[0]
+        temp_parttype += ', size: ' + '\"\033[93m{:,}\033[0m" bytes'.format(temp).replace(',', ' ')
 
         CRC = 0
         if addinfo:
@@ -1535,10 +1496,10 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         # считываем имя, идя до \00
         #вычисляем длину имени
         id_length = 0
-        t = struct.unpack('b', fin.read(1))[0]
+        t = struct.unpack('B', fin.read(1))[0]
         while(t != 0x00):
             id_length += 1
-            t = struct.unpack('b', fin.read(1))[0]
+            t = struct.unpack('B', fin.read(1))[0]
         #print(id_length)
         fin.seek(-1*(id_length+1), 1) # вернемся на начало имени id
         # считаем имя
@@ -1933,7 +1894,7 @@ def fixCRC(partID):
     # fix CRC for whole file
     if FW_HDR2 == 1:
         # Выведем новый размер файла прошивки т.к. он изменился
-        print('Firmware file size \033[94m{:>11,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
+        print('Firmware file size \033[94m{:,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
     
         CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, total_file_size, 0x24)
         if checksum_value == CRC_FW:
@@ -1950,7 +1911,7 @@ def fixCRC(partID):
     else:
         if FW_HDR == 1:
             # Выведем новый размер файла прошивки т.к. он изменился
-            print('Firmware file size \033[94m{:>11,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
+            print('Firmware file size \033[94m{:,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
 
             CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
             if checksum_value == CRC_FW:
@@ -2047,7 +2008,7 @@ def main():
                 print('Found \033[93m%i\033[0m partitions' % (partitions_count))
 
                 total_file_size = os.path.getsize(in_file)
-                print('Firmware file size \033[93m{:>11,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
+                print('Firmware file size \033[93m{:,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
 
                 # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
                 if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
@@ -2091,7 +2052,7 @@ def main():
         checksum_method = struct.unpack('<I', fin.read(4))[0]
         checksum_value = struct.unpack('<I', fin.read(4))[0]
         print('Found \033[93m%i\033[0m partitions' % partitions_count)
-        print('Firmware file size \033[93m{:>11,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
+        print('Firmware file size \033[93m{:,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
     
     
         # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
