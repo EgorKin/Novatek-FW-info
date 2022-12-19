@@ -4,6 +4,10 @@ Use Linux environment or WSL2 (Windows Subsystem for Linux) for properly work wi
 
 Novatek FW info is available under the terms of the GNU Public License version 3.
 
+If this project help you, you can give me a cup of coffee:
+[![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://ko-fi.com/egorkin)
+
+
 ![Безымянный](https://user-images.githubusercontent.com/4955678/184808463-1b5d62b6-eb76-41d9-a75a-dbd019e8f60f.png)
 ![NTKFWinfo2](https://user-images.githubusercontent.com/4955678/188560457-54a2b532-61db-4ca8-9b3c-c4916cae1c62.png)
 
