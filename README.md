@@ -2,6 +2,8 @@
 Python script for work with Novatek firmware files. Show full FW info, allow extract, replace, uncompress, compress partitions, fix CRC for modded partitions and whole firmware file. Useful tool for building custom firmwares.
 Use Linux environment or WSL2 (Windows Subsystem for Linux) for properly work with UBI and SPARSE partitions.
 
+Novatek FW info is available under the terms of the GNU Public License version 3.
+
 ![Безымянный](https://user-images.githubusercontent.com/4955678/184808463-1b5d62b6-eb76-41d9-a75a-dbd019e8f60f.png)
 ![NTKFWinfo2](https://user-images.githubusercontent.com/4955678/188560457-54a2b532-61db-4ca8-9b3c-c4916cae1c62.png)
 
@@ -70,3 +72,4 @@ I suggest use pypy3 VS python3 for increase speed compression for BCL1 LZ partit
 pypy3 ./NTKFWinfo.py -i GIT3FWv2.3.bin -c 0
 ```
 ![pypy3 speed-up](https://user-images.githubusercontent.com/4955678/188559054-e3ea1152-743b-4686-8a4f-b76c0dd529ba.png)
+
