@@ -34,6 +34,7 @@
 # V5.0 - private release
 # V5.1 - add FDT(DTB) partition uncompress/compress support
 # V5.2 - BCL1 LZ77 compatibility improvements, BCL1 LZMA DictionarySize support WIP
+# V5.3 - fix -x ALL (all partitions extraction)
 
 
 import os, struct, sys, argparse, array
@@ -2140,7 +2141,7 @@ def main():
         else:
             # extract all partitions
             for part_nr in range(partitions_count):
-                partition_extract(part_nr, -1) # -1 в функции преобразуется в 0, нужен чтобы не писать "from 0x%08X + 0x%08X to file"
+                partition_extract(part_id[part_nr], -1) # -1 в функции преобразуется в 0, нужен чтобы не писать "from 0x%08X + 0x%08X to file"
         exit(0)
 
 
