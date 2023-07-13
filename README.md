@@ -24,13 +24,13 @@ sudo apt-get install pypy3
 ```
 **Next install this python modules:**
 ```
-sudo pip install python-lzo
-sudo pip install ubi_reader
+sudo pip3 install python-lzo
+sudo pip3 install ubi_reader
 ```
 **For SPARSE partitions support install:**
 ```
 sudo apt-get install simg2img
-sudo apt-get install android-tools-fsutils
+sudo apt-get install android-sdk-libsparse-utils
 ```
 **For FDT(DTB) partitions support install:**
 ```
