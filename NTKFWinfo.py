@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # ==================================================================================
 # NTKFWinfo - python script for work with Novatek firmware files
 # Show full FW info, allow extract/replace/uncompress/compress partitions, fix CRC
@@ -193,13 +195,13 @@ def get_args():
     global is_silent
     global workdir
 
-    p = argparse.ArgumentParser(add_help=True, description='This script works with Novatek firmwares binary file. Show full FW info, allow extract/replace/uncompress/compress partitions, fix CRC. Copyright © 2022 Dex9999(4pda.to) aka Dex aka EgorKin(GitHub, etc.)')
+    p = argparse.ArgumentParser(add_help=True, description='This script works with Novatek firmware binary files. Show full FW info, allow extract/replace/uncompress/compress partitions, fixCRC. Copyright © 2023 Dex9999(4pda.to) aka Dex aka EgorKin(GitHub, etc.)')
     p.add_argument('-i',metavar='filename', nargs=1, help='input file')
-    p.add_argument('-x',metavar=('partID', 'offset'), nargs='+', help='extract partition by ID with optional start offset. Or all partitions if partID = ALL')
+    p.add_argument('-x',metavar=('partID', 'offset'), nargs='+', help='extract partition by ID with optional start offset or all partitions if partID set to \"ALL\"')
     p.add_argument('-r',metavar=('partID', 'offset', 'filename'), nargs=3, help='replace partition by ID with start offset using input file')
     p.add_argument('-u',metavar=('partID', 'offset'), type=int, nargs='+', help='uncompress partition by ID with optional start offset')
-    p.add_argument('-c',metavar=('partID'), type=int, nargs=1, help='compress partition by ID and merge to firmware file')
-    p.add_argument('-fixCRC', action='store_true', help='fix CRC value for all possible partitions')
+    p.add_argument('-c',metavar=('partID'), type=int, nargs=1, help='compress partition by ID to firmware input file and fixCRC')
+    p.add_argument('-fixCRC', action='store_true', help='fix CRC values for all possible partitions')
     p.add_argument('-silent', action='store_true', help='do not print messages, except errors')
     p.add_argument('-o',metavar='outputdir', nargs=1, help='set working dir')
 
@@ -1994,10 +1996,10 @@ def main():
 
     if is_silent != 1:
         print("===================================================================================")
-        print(" \033[92mNTKFWinfo\033[0m - python script for work with Novatek firmware files")
+        print(" \033[92mNTKFWinfo\033[0m - python script for work with Novatek firmware binary files")
         print(" Show full FW \033[93mi\033[0mnfo, allow e\033[93mx\033[0mtract/\033[93mr\033[0meplace/\033[93mu\033[0mncompress/\033[93mc\033[0mompress partitions, \033[93mfixCRC\033[0m")
         print("")
-        print(" Copyright © 2022 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
+        print(" Copyright © 2023 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
         print("===================================================================================")
 
 
