@@ -37,6 +37,7 @@
 # V5.1 - add FDT(DTB) partition uncompress/compress support
 # V5.2 - BCL1 LZ77 compatibility improvements, BCL1 LZMA DictionarySize support WIP
 # V5.3 - fix -x ALL (all partitions extraction)
+# V5.4 - fix additional characters in filenames support
 
 
 import os, struct, sys, argparse, array
@@ -215,7 +216,7 @@ def get_args():
     if args.o:
         workdir = args.o[0]
         if not os.path.exists(workdir):
-            os.system('mkdir ' + workdir)
+            os.system('mkdir ' + '\"' + workdir + '\"')
     else:
         workdir = ''
     
@@ -340,21 +341,21 @@ def compress_CKSM_UBI(part_nr, in2_file):
     fin.seek(part_startoffset[part_nr] + 0x40, 0)
     finread = fin.read(part_size[part_nr] - 0x40)
     fin.close()
-    fpartout = open(in2_file + '/' + 'tempfile', 'w+b')
+    fpartout = open(in2_file + '/tempfile', 'w+b')
     fpartout.write(finread)
     fpartout.close()
 
     # delete temp dir for info - ubireader require clear folder
-    subprocess.run('rm -rf ' + in2_file + '/tempdir', shell=True)
+    subprocess.run('rm -rf ' + '\"' + in2_file + '/tempdir' + '\"', shell=True)
 
     # get info about UBI to compressing script
-    subprocess.check_output('ubireader_utils_info ' + '-o ' + in2_file + '/tempdir ./' + in2_file + '/' + 'tempfile', shell=True)
+    subprocess.check_output('ubireader_utils_info ' + '-o ' + '\"' + in2_file + '/tempdir' + '\"' + ' ./' + '\"' + in2_file + '/tempfile' + '\"', shell=True)
 
     # delete tempfile
-    subprocess.run('rm ' + in2_file + '/tempfile', shell=True)
+    subprocess.run('rm ' + '\"' + in2_file + '/tempfile' + '\"', shell=True)
 
     # получим имя папки в которую была распакована партиция (пока я видел чисто цифровые имена, тоже что и image_seq -Q в выводе ubireader_utils_info)
-    d = os.popen('(cd ' + in2_file + '&& find -maxdepth 1 -wholename "./*" -not -wholename "./temp*" -type d)').read()
+    d = os.popen('(cd ' + '\"' + in2_file + '\"' + '&& find -maxdepth 1 -wholename "./*" -not -wholename "./temp*" -type d)').read()
 
     # проверим что нашли
     if not os.path.exists(in2_file + d[1:-1]):
@@ -365,10 +366,10 @@ def compress_CKSM_UBI(part_nr, in2_file):
     d = d[2:-1]
 
     # fix ini-file: delete line "vol_flags=0" it cause error "unknown flags"
-    subprocess.run('(cd ' + in2_file + '/tempdir/tempfile/img-' + d + ' && sed -i "/vol_flags = 0/d" img-' + d + '.ini)', shell=True)
+    subprocess.run('(cd ' + '\"' + in2_file + '/tempdir/tempfile/img-' + d + '\"' + ' && sed -i "/vol_flags = 0/d" img-' + d + '.ini)', shell=True)
 
     # run compilation dir to ubi script    
-    subprocess.run('(cd ' + in2_file + '/tempdir/tempfile/img-' + d + ' && ./create_ubi_img-' + d + '.sh ../../../' + d + '/*)', shell=True)
+    subprocess.run('(cd ' + '\"' + in2_file + '/tempdir/tempfile/img-' + d + '\"' + ' && ./create_ubi_img-' + d + '.sh ../../../' + d + '/*)', shell=True)
 
     # hide output print
     global is_silent
@@ -378,7 +379,7 @@ def compress_CKSM_UBI(part_nr, in2_file):
     partition_replace(part_id[part_nr], 0x40, in2_file + '/tempdir/tempfile/img-' + d + '/img-' + d + '.ubi')
 
     # delete temp dir for info
-    subprocess.run('rm -rf ' + in2_file + '/tempdir', shell=True)
+    subprocess.run('rm -rf ' + '\"' + in2_file + '/tempdir' + '\"', shell=True)
 
     # fix CRC
     is_silent = 0
@@ -427,7 +428,7 @@ def compress_CKSM_BCL(part_nr, in2_file):
     partition_replace(part_id[part_nr], 0x40, comp_filename)
 
     # delete comp_partitionID file
-    subprocess.run('rm -rf ' + comp_filename, shell=True)
+    subprocess.run('rm -rf ' + '\"' + comp_filename + '\"', shell=True)
     
     # fix CRC for CKSM
     is_silent = 0
@@ -465,10 +466,10 @@ def compress_CKSM_SPARSE(part_nr, in2_file):
         exit(0)
 
     # run compilation dir to SPARSE EXT4 cmd
-    os.popen('make_ext4fs -s -l ' + str(os.path.getsize(in2_file + '/tempfile.ext4')) + ' ' + in2_file + '/tempSPARSEfile ' + in2_file + '/mount').read()
+    os.popen('make_ext4fs -s -l ' + str(os.path.getsize(in2_file + '/tempfile.ext4')) + ' ' + '\"' + in2_file + '/tempSPARSEfile' + '\"' + ' ' + '\"' + in2_file + '/mount' + '\"').read()
 
     # umount
-    subprocess.run('umount -d -f ' + in2_file + '/mount', shell=True)
+    subprocess.run('umount -d -f ' + '\"' + in2_file + '/mount' + '\"', shell=True)
 
 
     # hide output print
@@ -480,7 +481,7 @@ def compress_CKSM_SPARSE(part_nr, in2_file):
 
     # удалим всю директорию
     # delete tempfile & tempfile.ext4 & tempSPARSEfile
-    os.system('rm -rf ' + in2_file)
+    os.system('rm -rf ' + '\"' + in2_file + '\"')
 
     # fix CRC
     is_silent = 0
@@ -521,7 +522,7 @@ def compress_BCL(part_nr, in2_file):
     partition_replace(part_id[part_nr], 0, comp_filename)
 
     # delete comp_partitionID file
-    subprocess.run('rm -rf ' + comp_filename, shell=True)
+    subprocess.run('rm -rf ' + '\"' + comp_filename + '\"', shell=True)
     
     # fix CRC
     is_silent = 0
@@ -547,7 +548,7 @@ def compress_FDT(part_nr, in2_file):
 
     # compress uncomp_partitionID to comp_partitionID
     comp_filename = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
-    os.system('sudo dtc -qq -I dts -O dtb ' + in2_file + ' -o ' + comp_filename)
+    os.system('sudo dtc -qq -I dts -O dtb ' + '\"' + in2_file + '\"' + ' -o ' + '\"' + comp_filename + '\"')
 
     # проверим прошла ли упаковка успешно
     if not os.path.exists(comp_filename):
@@ -562,7 +563,7 @@ def compress_FDT(part_nr, in2_file):
     partition_replace(part_id[part_nr], 0, comp_filename)
     
     # delete comp_partitionID file
-    subprocess.run('rm -rf ' + comp_filename, shell=True)
+    subprocess.run('rm -rf ' + '\"' + comp_filename + '\"', shell=True)
 
     # fix CRC
     is_silent = 0
@@ -1030,10 +1031,10 @@ def uncompress(in_offset, out_filename, size):
         fpartout.close()
         
         #unpack DTB to DTS
-        os.system('sudo dtc -qqq -I dtb -O dts ' + out_filename + '_tempfile' + ' -o ' + out_filename)
+        os.system('sudo dtc -qqq -I dtb -O dts ' + '\"' + out_filename + '_tempfile' + '\"' + ' -o ' + '\"' + out_filename + '\"')
         
         # delete tempfile
-        os.system('rm -rf ' + out_filename + '_tempfile')
+        os.system('rm -rf ' + '\"' + out_filename + '_tempfile' + '\"')
         return
 
 
@@ -1044,30 +1045,30 @@ def uncompress(in_offset, out_filename, size):
 
     if FourCC == b'UBI#':
         #create dir with similar name as for other parttition types
-        os.system('rm -rf ' + out_filename)
-        os.system('mkdir ' + out_filename)
+        os.system('rm -rf ' + '\"' + out_filename + '\"')
+        os.system('mkdir ' + '\"' + out_filename + '\"')
 
         #extract UBI partition to tempfile
         fin.seek(in_offset, 0)
         finread = fin.read(size)
         fin.close()
-        fpartout = open(out_filename + '/' + 'tempfile', 'w+b')
+        fpartout = open(out_filename + '/tempfile', 'w+b')
         fpartout.write(finread)
         fpartout.close()
 
         #unpack UBIFS to created dir
-        os.system('ubireader_extract_files -k -i -f ' + '-o ' + out_filename + ' ' + out_filename + '/' + 'tempfile')
+        os.system('ubireader_extract_files -k -i -f ' + '-o ' + '\"' + out_filename + '\"' + ' ' + '\"' + out_filename + '/tempfile' + '\"')
 
         # delete tempfile
-        os.system('rm -rf ' + out_filename + '/' + 'tempfile')
+        os.system('rm -rf ' + '\"' + out_filename + '/tempfile' + '\"')
         return
 
     # SPARSE EXT4
     if struct.unpack('>I', FourCC)[0] == 0x3AFF26ED:
         #create dir with similar name as for other parttition types
-        os.system('rm -rf ' + out_filename)
-        os.system('mkdir ' + out_filename)
-        os.system('mkdir ' + out_filename + '/mount') # subdir for mounting ext4
+        os.system('rm -rf ' + '\"' + out_filename + '\"')
+        os.system('mkdir ' + '\"' + out_filename + '\"')
+        os.system('mkdir ' + '\"' + out_filename + '/mount' + '\"') # subdir for mounting ext4
 
         #extract SPARSE EXT4 partition to tempfile
         fin.seek(in_offset, 0)
@@ -1078,16 +1079,16 @@ def uncompress(in_offset, out_filename, size):
         fpartout.close()
 
         # convert SPARSE to ext4
-        subprocess.run('simg2img ' + out_filename + '/tempfile ' + out_filename + '/tempfile.ext4', shell=True)
+        subprocess.run('simg2img ' + '\"' + out_filename + '/tempfile' + '\"' + ' ' + '\"' + out_filename + '/tempfile.ext4' + '\"', shell=True)
 
         # mount ext4 to folder
-        os.system('mount ' + out_filename + '/tempfile.ext4 ' + out_filename + '/mount')
+        os.system('mount ' + '\"' + out_filename + '/tempfile.ext4' + '\"' + ' ' + '\"' + out_filename + '/mount' + '\"')
 
         # удалим tempfile, tempfile.ext4 нам еще нужен будет для сборки обратно
-        os.system('rm -rf ' + out_filename + '/tempfile')
+        os.system('rm -rf ' + '\"' + out_filename + '/tempfile' + '\"')
         return
 
-    print("\033[91mFDT(DTB) or BCL1 or UBI# or SPARSE markers not found, exit\033[0m")
+    print("\033[91mOnly FDT(DTB), BCL1, UBI and SPARSE partitions supported now, exit\033[0m")
     fin.close()
 
 
