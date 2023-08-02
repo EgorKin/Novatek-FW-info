@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
 # ==================================================================================
-# NTKFWinfo - python script for work with Novatek firmware files
+# NTKFWinfo - python script for work with Novatek firmware binary files
 # Show full FW info, allow extract/replace/uncompress/compress partitions, fix CRC
 #
-# Copyright © 2022 Dex9999(4pda.to) aka Dex aka EgorKin(GitHub, etc.)
+# Copyright © 2023 Dex9999(4pda.to) aka Dex aka EgorKin(GitHub, etc.)
 # ==================================================================================
 
 
@@ -1456,7 +1456,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
         # Image Data Size
         temp = struct.unpack('>I', fin.read(4))[0]
-        temp_parttype += ', size: ' + '\"\033[93m{:,}\033[0m" bytes'.format(temp).replace(',', ' ')
+        temp_parttype += ', size: ' + '\"\033[93m{:,}\033[0m" bytes'.format(temp)
 
         CRC = 0
         if addinfo:
@@ -1852,7 +1852,7 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                         enddata = fin.read()
 
                     # заменим партицию
-                    #print('replace part at 0x%08X' % (part_startoffset[part_nr] + is_replace_offset))
+                    #print('replace partition at 0x%08X' % (part_startoffset[part_nr] + is_replace_offset))
                     fin.seek(part_startoffset[part_nr] + is_replace_offset, 0)
                     fin.write(replacedata)
 
@@ -1940,7 +1940,7 @@ def fixCRC(partID):
     # fix CRC for whole file
     if FW_HDR2 == 1:
         # Выведем новый размер файла прошивки т.к. он изменился
-        print('Firmware file size \033[94m{:,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
+        print('Firmware file size \033[94m{:,}\033[0m bytes'.format(total_file_size))
     
         CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, total_file_size, 0x24)
         if checksum_value == CRC_FW:
@@ -1957,7 +1957,7 @@ def fixCRC(partID):
     else:
         if FW_HDR == 1:
             # Выведем новый размер файла прошивки т.к. он изменился
-            print('Firmware file size \033[94m{:,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
+            print('Firmware file size \033[94m{:,}\033[0m bytes'.format(total_file_size))
 
             CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
             if checksum_value == CRC_FW:
@@ -2054,7 +2054,7 @@ def main():
                 print('Found \033[93m%i\033[0m partitions' % (partitions_count))
 
                 total_file_size = os.path.getsize(in_file)
-                print('Firmware file size \033[93m{:,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
+                print('Firmware file size \033[93m{:,}\033[0m bytes'.format(total_file_size))
 
                 # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
                 if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
@@ -2098,7 +2098,7 @@ def main():
         checksum_method = struct.unpack('<I', fin.read(4))[0]
         checksum_value = struct.unpack('<I', fin.read(4))[0]
         print('Found \033[93m%i\033[0m partitions' % partitions_count)
-        print('Firmware file size \033[93m{:,}\033[0m bytes'.format(total_file_size).replace(',', ' '))
+        print('Firmware file size \033[93m{:,}\033[0m bytes'.format(total_file_size))
     
     
         # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
@@ -2290,9 +2290,9 @@ def main():
             print(' ----------------------------------------------------------------------------------------------------------------------')
             for a in range(partitions_count):
                 if part_crc[a] == part_crcCalc[a]:
-                    print("  %2i    %-15s  0x%08X - 0x%08X     %9i       0x%04X     \033[92m0x%04X\033[0m       %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
+                    print("  %2i    %-15s  0x%08X - 0x%08X     %+11s     0x%04X     \033[92m0x%04X\033[0m       %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
                 else:
-                    print("  %2i    %-15s  0x%08X - 0x%08X     %9i       0x%04X     \033[91m0x%04X\033[0m       %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
+                    print("  %2i    %-15s  0x%08X - 0x%08X     %+11s     0x%04X     \033[91m0x%04X\033[0m       %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
             print(" ----------------------------------------------------------------------------------------------------------------------")
         else:
             print(" -------------------------------------------------- PARTITIONS INFO ---------------------------------------------------")
@@ -2300,9 +2300,9 @@ def main():
             print(" ----------------------------------------------------------------------------------------------------------------------")
             for a in range(partitions_count):
                 if part_crc[a] == part_crcCalc[a]:
-                    print("  %2i     0x%08X - 0x%08X     %9i       0x%04X     \033[92m0x%04X\033[0m       %s" % (part_id[a], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
+                    print("  %2i     0x%08X - 0x%08X     %+11s     0x%04X     \033[92m0x%04X\033[0m       %s" % (part_id[a], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
                 else:
-                    print("  %2i     0x%08X - 0x%08X     %9i       0x%04X     \033[91m0x%04X\033[0m       %s" % (part_id[a], part_startoffset[a], part_endoffset[a], part_size[a], part_crc[a], part_crcCalc[a], part_type[a]))
+                    print("  %2i     0x%08X - 0x%08X     %+11s     0x%04X     \033[91m0x%04X\033[0m       %s" % (part_id[a], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
             print(" ----------------------------------------------------------------------------------------------------------------------")
 
 
