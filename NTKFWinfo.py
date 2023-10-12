@@ -38,6 +38,7 @@
 # V5.2 - BCL1 LZ77 compatibility improvements, BCL1 LZMA DictionarySize support WIP
 # V5.3 - fix -x ALL (all partitions extraction)
 # V5.4 - fix additional characters in filenames support
+# V5.5 - add -udtb and -cdtb for convert DTB file to DTS file for easy view/edit application.dtb file with sensor settings and vice versa
 
 
 import os, struct, sys, argparse, array
@@ -202,7 +203,9 @@ def get_args():
     p.add_argument('-r',metavar=('partID', 'offset', 'filename'), nargs=3, help='replace partition by ID with start offset using input file')
     p.add_argument('-u',metavar=('partID', 'offset'), type=int, nargs='+', help='uncompress partition by ID with optional start offset')
     p.add_argument('-c',metavar=('partID'), type=int, nargs=1, help='compress partition by ID to firmware input file and fixCRC')
-    p.add_argument('-fixCRC', action='store_true', help='fix CRC values for all possible partitions')
+    p.add_argument('-udtb',metavar='filename', nargs=2, help='uncompress DTB file to DTS file')
+    p.add_argument('-cdtb',metavar='filename', nargs=2, help='compress DTS file to DTB file')
+    p.add_argument('-fixCRC', action='store_true', help='fix CRC values for all possible partitions and whole FW file')
     p.add_argument('-silent', action='store_true', help='do not print messages, except errors')
     p.add_argument('-o',metavar='outputdir', nargs=1, help='set working dir')
 
@@ -211,7 +214,6 @@ def get_args():
         sys.exit(1)
 
     args=p.parse_args(sys.argv[1:])
-    in_file=args.i[0]
 
     if args.o:
         workdir = args.o[0]
@@ -261,6 +263,14 @@ def get_args():
         is_uncompress = -1
         is_uncompress_offset = -1
 
+    if args.udtb:
+        uncompressDTB(args.udtb[0], args.udtb[1])
+        exit(0)
+
+    if args.cdtb:
+        compressToDTB(args.cdtb[0], args.cdtb[1])
+        exit(0)
+
     if args.c:
         is_compress = args.c[0]
     else:
@@ -276,6 +286,7 @@ def get_args():
     else:
         is_silent = -1
 
+    in_file=args.i[0]
 
     return (in_file, is_extract, is_extract_offset, is_extract_all, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, is_compress, fixCRC_partID)
 
@@ -1009,6 +1020,24 @@ def updateProgressBar(value):
     if value == 100:
         print('')
 
+
+def uncompressDTB(in_file, out_filename):
+    fin = open(in_file, 'rb')
+    FourCC = fin.read(4)
+    fin.close()
+
+    # check DTB magic
+    if struct.unpack('>I', FourCC)[0] == 0xD00DFEED:
+        #unpack DTB to DTS
+        os.system('sudo dtc -qqq -I dtb -O dts ' + '\"' + in_file + '\"' + ' -o ' + '\"' + out_filename + '\"')
+    else:
+        print("\033[91mDTB marker not found, exit\033[0m")
+        sys.exit(1)
+
+
+def compressToDTB(in_file, out_filename):
+    #pack to DTB
+    os.system('sudo dtc -qqq -I dts -O dtb ' + '\"' + in_file + '\"' + ' -o ' + '\"' + out_filename + '\"')
 
 
 def uncompress(in_offset, out_filename, size):
