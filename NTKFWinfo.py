@@ -189,6 +189,17 @@ compressAlgoTypes = {
 }
 
 
+def ShowInfoBanner():
+    print("===================================================================================")
+    print(" \033[92mNTKFWinfo\033[0m - python script for work with Novatek firmware binary files")
+    print(" Show full FW \033[93mi\033[0mnfo, allow e\033[93mx\033[0mtract/\033[93mr\033[0meplace/\033[93mu\033[0mncompress/\033[93mc\033[0mompress partitions, \033[93mfixCRC\033[0m")
+    print("")
+    print(" Copyright © 2023 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
+    print("")
+    print(" If you like this project, support me by donating: \033[92mhttps://paypal.me/egorkindv\033[0m")
+    print("===================================================================================")
+
+
 def get_args():
     global in_file
     global is_extract
@@ -197,19 +208,20 @@ def get_args():
     global is_silent
     global workdir
 
-    p = argparse.ArgumentParser(add_help=True, description='This script works with Novatek firmware binary files. Show full FW info, allow extract/replace/uncompress/compress partitions, fixCRC. Copyright © 2023 Dex9999(4pda.to) aka Dex aka EgorKin(GitHub, etc.)')
+    p = argparse.ArgumentParser(add_help=True, description='')
     p.add_argument('-i',metavar='filename', nargs=1, help='input file')
     p.add_argument('-x',metavar=('partID', 'offset'), nargs='+', help='extract partition by ID with optional start offset or all partitions if partID set to \"ALL\"')
     p.add_argument('-r',metavar=('partID', 'offset', 'filename'), nargs=3, help='replace partition by ID with start offset using input file')
     p.add_argument('-u',metavar=('partID', 'offset'), type=int, nargs='+', help='uncompress partition by ID with optional start offset')
     p.add_argument('-c',metavar=('partID'), type=int, nargs=1, help='compress partition by ID to firmware input file and fixCRC')
-    p.add_argument('-udtb',metavar='filename', nargs=2, help='uncompress DTB file to DTS file')
-    p.add_argument('-cdtb',metavar='filename', nargs=2, help='compress DTS file to DTB file')
+    p.add_argument('-udtb',metavar=('DTB_filename', 'DTS_filename'), nargs=2, help='convert DTB to DTS file')
+    p.add_argument('-cdtb',metavar=('DTS_filename', 'DTB_filename'), nargs=2, help='convert DTS to DTB file')
     p.add_argument('-fixCRC', action='store_true', help='fix CRC values for all possible partitions and whole FW file')
     p.add_argument('-silent', action='store_true', help='do not print messages, except errors')
     p.add_argument('-o',metavar='outputdir', nargs=1, help='set working dir')
 
     if len(sys.argv) < 3:
+        ShowInfoBanner()
         p.print_help(sys.stderr)
         sys.exit(1)
 
@@ -2024,13 +2036,9 @@ def main():
     if platform.system() == 'Windows':
         os.system('color')
 
+    # show header about this program and author copyrights
     if is_silent != 1:
-        print("===================================================================================")
-        print(" \033[92mNTKFWinfo\033[0m - python script for work with Novatek firmware binary files")
-        print(" Show full FW \033[93mi\033[0mnfo, allow e\033[93mx\033[0mtract/\033[93mr\033[0meplace/\033[93mu\033[0mncompress/\033[93mc\033[0mompress partitions, \033[93mfixCRC\033[0m")
-        print("")
-        print(" Copyright © 2023 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
-        print("===================================================================================")
+        ShowInfoBanner()
 
 
     FW_HDR = 0
