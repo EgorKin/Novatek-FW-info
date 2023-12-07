@@ -39,6 +39,7 @@
 # V5.3 - fix -x ALL (all partitions extraction)
 # V5.4 - fix additional characters in filenames support
 # V5.5 - add -udtb and -cdtb for convert DTB file to DTS file for easy view/edit application.dtb file with sensor settings and vice versa
+# V5.6 - print some additional info while unpack BCL1 partitions
 
 
 import os, struct, sys, argparse, array
@@ -193,7 +194,7 @@ def ShowInfoBanner():
     print("===================================================================================")
     print(" \033[92mNTKFWinfo\033[0m - python script for work with Novatek firmware binary files")
     print(" Show full FW \033[93mi\033[0mnfo, allow e\033[93mx\033[0mtract/\033[93mr\033[0meplace/\033[93mu\033[0mncompress/\033[93mc\033[0mompress partitions, \033[93mfixCRC\033[0m")
-    print("")
+    print(" Version: 5.6")
     print(" Copyright © 2023 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
     print("")
     print(" If you like this project, support me by donating: \033[92mhttps://paypal.me/egorkindv\033[0m")
@@ -809,7 +810,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                     #print("length = 0x%08X" % bestlength)
                     ##outpos += _LZ_WriteVarSize( bestlength, &out[ outpos ] )
                     buf = 0
-                    y = bestlength >> 3;
+                    y = bestlength >> 3
                     num_bytes = 5
                     while num_bytes >= 2:
                         if y & 0xfe000000 != 0:
@@ -823,7 +824,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                         b = (bestlength >> (i*7)) & 0x0000007f
                         if i > 0:
                             b |= 0x00000080
-                        buf = (buf<<8) | b;
+                        buf = (buf<<8) | b
                         i -= 1
                     # Return number of bytes written
                     outpos += num_bytes
@@ -838,7 +839,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                     #print("offset = 0x%08X" % bestoffset)
                     ##outpos += _LZ_WriteVarSize( bestoffset, &out[ outpos ] )
                     buf = 0
-                    y = bestoffset >> 3;
+                    y = bestoffset >> 3
                     num_bytes = 5
                     while num_bytes >= 2:
                         if y & 0xfe000000 != 0:
@@ -852,7 +853,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                         b = (bestoffset >> (i*7)) & 0x0000007f
                         if i > 0:
                             b |= 0x00000080
-                        buf = (buf<<8) | b;
+                        buf = (buf<<8) | b
                         i -= 1
                     # Return number of bytes written
                     outpos += num_bytes
@@ -1178,7 +1179,7 @@ def BCL1_uncompress(in_offset, out_filename):
         #oldcurrprogress = 0
         
         # Main uncompression loop
-        outpos = 0;
+        outpos = 0
         while((inpos < insize) & (outpos < outsize)):
             symbol = struct.unpack('B', fin.read(1))[0]
             inpos += 1
@@ -1209,8 +1210,8 @@ def BCL1_uncompress(in_offset, out_filename):
                         y = (y << 7) | (b & 0x0000007f)
                         num_bytes += 1
     
-                    length = y;
-                    inpos += num_bytes;
+                    length = y
+                    inpos += num_bytes
                     #print("length = 0x%0x" % (length))
                     #=================================================
                     
@@ -1228,8 +1229,8 @@ def BCL1_uncompress(in_offset, out_filename):
                         y = (y << 7) | (b & 0x0000007f)
                         num_bytes += 1
     
-                    offset = y;
-                    inpos += num_bytes;
+                    offset = y
+                    inpos += num_bytes
                     #print("offset = 0x%0x" % (offset))
                     #=================================================
     
@@ -1280,6 +1281,19 @@ def BCL1_uncompress(in_offset, out_filename):
         decompress = zlib.decompress(dataread)
         fout.write(decompress)
         fout.close()
+
+    # выведем немного информации о распакованной BCL1 партиции
+    fin = open(out_filename, 'rb')
+    dataread = bytearray(fin.read())
+    fin.close()
+
+    if (dataread[0x6C] == 0xFF) & (dataread[0x6D] == 0xFF) & (dataread[0x46C] == 0x55) & (dataread[0x46D] == 0xAA):
+        print('Partition data Name="\033[93m%s\033[0m", Data="\033[93m%s\033[0m", Size=%s, CRC Offset=0x46E, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x450:0x458])[0])[2:-1].strip('\\x00'), str(struct.unpack('8s',dataread[0x460:0x468])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x468:0x46C])[0]), struct.unpack('<H', dataread[0x46E:0x470])[0]))
+    else:
+        if (dataread[0x6C] == 0x55) & (dataread[0x6D] == 0xAA):
+            print('Partition data Name="\033[93m%s\033[0m", Data="\033[93m%s\033[0m", Size=%s, CRC Offset=0x6E, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x50:0x58])[0])[2:-1].strip('\\x00'), str(struct.unpack('8s',dataread[0x60:0x68])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x68:0x6C])[0]), struct.unpack('<H', dataread[0x6E:0x70])[0]))
+        else:
+            print('Partition data without CRC')
 
 
 
@@ -1561,7 +1575,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
         unpackedSize = struct.unpack('>I', fin.read(4))[0]
         packedSize = struct.unpack('>I', fin.read(4))[0]
-        temp_parttype += ' \033[93m' + str(unpackedSize) + '\033[0m packed to \033[93m' + str(packedSize) + '\033[0m bytes'
+        temp_parttype += ' \033[93m{:,}\033[0m'.format(unpackedSize) + ' packed to ' + '\033[93m{:,}\033[0m bytes'.format(packedSize)
 
         CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, packedSize + 0x10, 0x4)
 
@@ -2328,19 +2342,20 @@ def main():
             print(' ----------------------------------------------------------------------------------------------------------------------')
             for a in range(partitions_count):
                 if part_crc[a] == part_crcCalc[a]:
-                    print("  %2i    %-15s  0x%08X - 0x%08X     %+11s     0x%04X     \033[92m0x%04X\033[0m       %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
+                    print("  %2i    %-15s  0x%08X - 0x%08X     %+11s     0x%04X     \033[92m0x%04X\033[0m     %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
                 else:
-                    print("  %2i    %-15s  0x%08X - 0x%08X     %+11s     0x%04X     \033[91m0x%04X\033[0m       %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
+                    print("  %2i    %-15s  0x%08X - 0x%08X     %+11s     0x%04X     \033[91m0x%04X\033[0m     %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
             print(" ----------------------------------------------------------------------------------------------------------------------")
+        # если dtb нет - то информацию без имен партиций
         else:
             print(" -------------------------------------------------- PARTITIONS INFO ---------------------------------------------------")
             print("|  ID   START_OFFSET  END_OFFSET         SIZE       ORIG_CRC   CALC_CRC                        TYPE                    |")
             print(" ----------------------------------------------------------------------------------------------------------------------")
             for a in range(partitions_count):
                 if part_crc[a] == part_crcCalc[a]:
-                    print("  %2i     0x%08X - 0x%08X     %+11s     0x%04X     \033[92m0x%04X\033[0m       %s" % (part_id[a], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
+                    print("  %2i     0x%08X - 0x%08X     %+11s     0x%04X     \033[92m0x%04X\033[0m     %s" % (part_id[a], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
                 else:
-                    print("  %2i     0x%08X - 0x%08X     %+11s     0x%04X     \033[91m0x%04X\033[0m       %s" % (part_id[a], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
+                    print("  %2i     0x%08X - 0x%08X     %+11s     0x%04X     \033[91m0x%04X\033[0m     %s" % (part_id[a], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
             print(" ----------------------------------------------------------------------------------------------------------------------")
 
 
