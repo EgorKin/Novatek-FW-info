@@ -192,12 +192,12 @@ compressAlgoTypes = {
 
 def ShowInfoBanner():
     print("===================================================================================")
-    print(" \033[92mNTKFWinfo\033[0m - python script for work with Novatek firmware binary files")
-    print(" Show full FW \033[93mi\033[0mnfo, allow e\033[93mx\033[0mtract/\033[93mr\033[0meplace/\033[93mu\033[0mncompress/\033[93mc\033[0mompress partitions, \033[93mfixCRC\033[0m")
-    print(" Version: 5.6")
-    print(" Copyright © 2023 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
+    print("  \033[92mNTKFWinfo\033[0m - python script for work with Novatek firmware binary files. Ver. 5.6")
+    print("  Show full FW \033[93mi\033[0mnfo, allow e\033[93mx\033[0mtract/\033[93mr\033[0meplace/\033[93mu\033[0mncompress/\033[93mc\033[0mompress partitions, \033[93mfixCRC\033[0m")
     print("")
-    print(" If you like this project, support me by donating: \033[92mhttps://paypal.me/egorkindv\033[0m")
+    print("  Copyright © 2023 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
+    print("")
+    print("  If you like this project, support me by donating: \033[92mhttps://paypal.me/egorkindv\033[0m")
     print("===================================================================================")
 
 
