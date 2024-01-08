@@ -1288,10 +1288,10 @@ def BCL1_uncompress(in_offset, out_filename):
     fin.close()
 
     if (dataread[0x6C] == 0xFF) & (dataread[0x6D] == 0xFF) & (dataread[0x46C] == 0x55) & (dataread[0x46D] == 0xAA):
-        print('Partition data Name="\033[93m%s\033[0m", Data="\033[93m%s\033[0m", Size=%s, CRC Offset=0x46E, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x450:0x458])[0])[2:-1].strip('\\x00'), str(struct.unpack('8s',dataread[0x460:0x468])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x468:0x46C])[0]), struct.unpack('<H', dataread[0x46E:0x470])[0]))
+        print('Partition data Name="\033[93m%s\033[0m", Data="\033[93m%s\033[0m", Size=%s, CRC Offset=0x46E, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x450:0x458])[0])[2:-1].replace('\\x00',''), str(struct.unpack('8s',dataread[0x460:0x468])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x468:0x46C])[0]), struct.unpack('<H', dataread[0x46E:0x470])[0]))
     else:
         if (dataread[0x6C] == 0x55) & (dataread[0x6D] == 0xAA):
-            print('Partition data Name="\033[93m%s\033[0m", Data="\033[93m%s\033[0m", Size=%s, CRC Offset=0x6E, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x50:0x58])[0])[2:-1].strip('\\x00'), str(struct.unpack('8s',dataread[0x60:0x68])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x68:0x6C])[0]), struct.unpack('<H', dataread[0x6E:0x70])[0]))
+            print('Partition data Name="\033[93m%s\033[0m", Data="\033[93m%s\033[0m", Size=%s, CRC Offset=0x6E, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x50:0x58])[0])[2:-1].replace('\\x00',''), str(struct.unpack('8s',dataread[0x60:0x68])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x68:0x6C])[0]), struct.unpack('<H', dataread[0x6E:0x70])[0]))
         else:
             print('Partition data without CRC')
 
