@@ -40,6 +40,7 @@
 # V5.4 - fix additional characters in filenames support
 # V5.5 - add -udtb and -cdtb for convert DTB file to DTS file for easy view/edit application.dtb file with sensor settings and vice versa
 # V5.6 - print some additional info while unpack BCL1 partitions
+# V5.7 - make_ext4 is not need anymore and deprecated in modern distributives, move to img2simg
 
 
 import os, struct, sys, argparse, array
@@ -192,7 +193,7 @@ compressAlgoTypes = {
 
 def ShowInfoBanner():
     print("===================================================================================")
-    print("  \033[92mNTKFWinfo\033[0m - python script for work with Novatek firmware binary files. Ver. 5.6")
+    print("  \033[92mNTKFWinfo\033[0m - python script for work with Novatek firmware binary files. Ver. 5.7")
     print("  Show full FW \033[93mi\033[0mnfo, allow e\033[93mx\033[0mtract/\033[93mr\033[0meplace/\033[93mu\033[0mncompress/\033[93mc\033[0mompress partitions, \033[93mfixCRC\033[0m")
     print("")
     print("  Copyright © 2023 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
@@ -486,15 +487,18 @@ def compress_CKSM_SPARSE(part_nr, in2_file):
 
     # для сборки SPARSE нужно знать размер tempfile.ext4
     if not os.path.exists(in2_file + '/tempfile.ext4'):
-        print('\033[91m%s file does not found, exit\033[0m' % in2_file +  + '/tempfile.ext4')
+        print('\033[91m%s file does not found, exit\033[0m' % in2_file + '/tempfile.ext4')
         exit(0)
 
     # run compilation dir to SPARSE EXT4 cmd
-    os.popen('make_ext4fs -s -l ' + str(os.path.getsize(in2_file + '/tempfile.ext4')) + ' ' + '\"' + in2_file + '/tempSPARSEfile' + '\"' + ' ' + '\"' + in2_file + '/mount' + '\"').read()
+    # "make_ext4fs" is deprecated now
+    #os.popen('make_ext4fs -s -l ' + str(os.path.getsize(in2_file + '/tempfile.ext4')) + ' ' + '\"' + in2_file + '/tempSPARSEfile' + '\"' + ' ' + '\"' + in2_file + '/mount' + '\"').read()
 
-    # umount
+    # umount - it is mean that we updates tempfile.ext4 file depend on current /mount folder
     subprocess.run('umount -d -f ' + '\"' + in2_file + '/mount' + '\"', shell=True)
 
+    # convert ext4 to SPARSE
+    subprocess.run('img2simg ' + '\"' + in2_file + '/tempfile.ext4' + '\"' + ' ' + '\"' + in2_file + '/tempSPARSEfile' + '\"', shell=True)
 
     # hide output print
     global is_silent
