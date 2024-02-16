@@ -29,7 +29,6 @@ sudo pip3 install ubi_reader
 ```
 **For SPARSE partitions support install:**
 ```
-sudo apt-get install simg2img
 sudo apt-get install android-sdk-libsparse-utils
 ```
 **For FDT(DTB) partitions support install:**
