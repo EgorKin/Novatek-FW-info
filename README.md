@@ -4,7 +4,7 @@ Use Linux environment or WSL2 (Windows Subsystem for Linux) for properly work wi
 
 Novatek FW info is available under the terms of the GNU Public License version 3.
 
-If this project help you, you can give me a cup of coffee:
+If this project helps you, you can buy me a cup of coffee:
 [![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://paypal.me/egorkindv)
 
 
@@ -22,7 +22,7 @@ sudo apt-get install mtd-utils
 sudo apt-get install liblzo2-dev
 sudo apt-get install pypy3
 ```
-**Next install this python modules:**
+**Additionaly install this python modules:**
 ```
 sudo pip3 install python-lzo
 sudo pip3 install ubi_reader
@@ -41,11 +41,11 @@ sudo apt-get install device-tree-compiler
 ```
 python3 ./NTKFWinfo.py -i FWA229A.bin
 ```
-### Uncompress partition by ID to file(for BCL1) or folder(for UBI or SPARSE):
+### Uncompress partition by ID to a file(for BCL1) or folder(for UBI or SPARSE):
 ```
 python3 ./NTKFWinfo.py -i FWA229A.bin -u 6
 ```
-### Compress partition back to firmware file from file(for BCL1) or folder(for UBI or SPARSE) and fix CRC:
+### Compress partition back to firmware binary file from uncompressed file(for BCL1) or folder(for UBI or SPARSE) and fix all CRC:
 ```
 python3 ./NTKFWinfo.py -i FWA229A.bin -c 6
 ```
@@ -71,7 +71,7 @@ python3 ./NTKFWinfo.py -i FWA229A.bin -c 6 -o tempdir
 ```
 
 ## Speed-up compress BCL1 LZ partitions:
-I suggest use pypy3 VS python3 for increase speed compression for BCL1 LZ partitions:
+I suggest use pypy3 VS python3 to decrease compression time for BCL1 LZ partitions:
 ```
 pypy3 ./NTKFWinfo.py -i GIT3FWv2.3.bin -c 0
 ```
