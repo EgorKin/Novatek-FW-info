@@ -41,7 +41,8 @@
 # V5.5 - add -udtb and -cdtb for convert DTB file to DTS file for easy view/edit application.dtb file with sensor settings and vice versa
 # V5.6 - print some additional info while unpack BCL1 partitions
 # V5.7 - make_ext4 is not need anymore and deprecated in modern distributives, move to img2simg
-
+# V5.8 - Fix CRC for uncompressed data partition before compress it to BCL1 partition if it is required
+CURRENT_VERSION = '5.8'
 
 import os, struct, sys, argparse, array
 from datetime import datetime
@@ -193,7 +194,7 @@ compressAlgoTypes = {
 
 def ShowInfoBanner():
     print("===================================================================================")
-    print("  \033[92mNTKFWinfo\033[0m - python script for work with Novatek firmware binary files. Ver. 5.7")
+    print("  \033[92mNTKFWinfo\033[0m - python script for work with Novatek firmware binary files. Ver. %s" % (CURRENT_VERSION))
     print("  Show full FW \033[93mi\033[0mnfo, allow e\033[93mx\033[0mtract/\033[93mr\033[0meplace/\033[93mu\033[0mncompress/\033[93mc\033[0mompress partitions, \033[93mfixCRC\033[0m")
     print("")
     print("  Copyright © 2023 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
@@ -687,17 +688,43 @@ def BCL1_compress(part_nr, in_offset, in2_file):
     # а ещё есть CRC несжатых данных:
     #   если по смещению 0x6C лежат FFFF а по 0x46C лежат 55AA то CRC_offset = 0x46E- изменил это из-за Viofo FW139, ввел доп. условие
     # а если по смещению 0x6C лежат 55AA то CRC_offset = 0x6E
+    # а еще может быть в самом начале файла 0x100 байт данных из-за которых по смещению 0x16C лежат 55AA и CRC_offset = 0x16E
+    #
     # иначе в файле прошивки нет CRC для несжатых данных
     # Если он есть то этот CRC нужно расчитать и записать до того как начать сжатие в BCL1
     if (dataread[0x6C] == 0xFF) & (dataread[0x6D] == 0xFF) & (dataread[0x46C] == 0x55) & (dataread[0x46D] == 0xAA):
         newCRC = MemCheck_CalcCheckSum16Bit(in2_file, 0, len(dataread), 0x46E)
+        oldCRC = (dataread[0x46F]<<8)|dataread[0x46E]
+        if is_silent != 1:
+            if oldCRC != newCRC:
+                print('Uncompressed data partitionID %i at \033[94m0x%04X\033[0m: ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (part_id[part_nr], 0x46E, oldCRC, newCRC))
+            else:
+                print('Uncompressed data partitionID %i at \033[94m0x%04X\033[0m: ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (part_id[part_nr], 0x46E, oldCRC, newCRC))
         dataread[0x46E] = (newCRC & 0xFF)
         dataread[0x46F] = ((newCRC >> 8) & 0xFF)
     else:
         if (dataread[0x6C] == 0x55) & (dataread[0x6D] == 0xAA):
             newCRC = MemCheck_CalcCheckSum16Bit(in2_file, 0, len(dataread), 0x6E)
+            oldCRC = (dataread[0x6F]<<8)|dataread[0x6E]
+            if is_silent != 1:
+                if oldCRC != newCRC:
+                    print('Uncompressed data partitionID %i at \033[94m0x%04X\033[0m: ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (part_id[part_nr], 0x6E, oldCRC, newCRC))
+                else:
+                    print('Uncompressed data partitionID %i at \033[94m0x%04X\033[0m: ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (part_id[part_nr], 0x6E, oldCRC, newCRC))
             dataread[0x6E] = (newCRC & 0xFF)
             dataread[0x6F] = ((newCRC >> 8) & 0xFF)
+        else:
+            # для Viofo A139 Pro появилось вот такое ещё условие
+            if (dataread[0x16C] == 0x55) & (dataread[0x16D] == 0xAA):
+                newCRC = MemCheck_CalcCheckSum16Bit(in2_file, 0, len(dataread), 0x16E)
+                oldCRC = (dataread[0x16F]<<8)|dataread[0x16E]
+                if is_silent != 1:
+                    if oldCRC != newCRC:
+                        print('Uncompressed data partitionID %i at \033[94m0x%04X\033[0m: ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (part_id[part_nr], 0x16E, oldCRC, newCRC))
+                    else:
+                        print('Uncompressed data partitionID %i at \033[94m0x%04X\033[0m: ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (part_id[part_nr], 0x16E, oldCRC, newCRC))
+                dataread[0x16E] = (newCRC & 0xFF)
+                dataread[0x16F] = ((newCRC >> 8) & 0xFF)
 
     # LZ77 compress
     if Algorithm == 0x09:
@@ -1292,13 +1319,13 @@ def BCL1_uncompress(in_offset, out_filename):
     fin.close()
 
     if (dataread[0x6C] == 0xFF) & (dataread[0x6D] == 0xFF) & (dataread[0x46C] == 0x55) & (dataread[0x46D] == 0xAA):
-        print('Partition data: Name="\033[93m%s\033[0m", Date="\033[93m%s\033[0m", Size=%s, CRC Offset=0x46E, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x450:0x458])[0])[2:-1].replace('\\x00',''), str(struct.unpack('8s',dataread[0x460:0x468])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x468:0x46C])[0]), struct.unpack('<H', dataread[0x46E:0x470])[0]))
+        print('Partition data: Name="\033[93m%s\033[0m", Date="\033[93m%s\033[0m", Size=%s, CRC Offset=\033[93m%04X\033[0m, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x450:0x458])[0])[2:-1].replace('\\x00',''), str(struct.unpack('8s',dataread[0x460:0x468])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x468:0x46C])[0]), 0x46E, struct.unpack('<H', dataread[0x46E:0x470])[0]))
     else:
         if (dataread[0x6C] == 0x55) & (dataread[0x6D] == 0xAA):
-            print('Partition data: Name="\033[93m%s\033[0m", Date="\033[93m%s\033[0m", Size=%s, CRC Offset=0x6E, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x50:0x58])[0])[2:-1].replace('\\x00',''), str(struct.unpack('8s',dataread[0x60:0x68])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x68:0x6C])[0]), struct.unpack('<H', dataread[0x6E:0x70])[0]))
+            print('Partition data: Name="\033[93m%s\033[0m", Date="\033[93m%s\033[0m", Size=%s, CRC Offset=\033[93m%04X\033[0m, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x50:0x58])[0])[2:-1].replace('\\x00',''), str(struct.unpack('8s',dataread[0x60:0x68])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x68:0x6C])[0]), 0x6E, struct.unpack('<H', dataread[0x6E:0x70])[0]))
         else:
             if (dataread[0x16C] == 0x55) & (dataread[0x16D] == 0xAA):
-                print('Partition with 0x100 data at begin: Name="\033[93m%s\033[0m", Date="\033[93m%s\033[0m", Size=%s, CRC Offset=0x16E, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x150:0x158])[0])[2:-1].replace('\\x00',''), str(struct.unpack('8s',dataread[0x160:0x168])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x168:0x16C])[0]), struct.unpack('<H', dataread[0x16E:0x170])[0]))
+                print('Partition with 0x100 data at begin: Name="\033[93m%s\033[0m", Date="\033[93m%s\033[0m", Size=%s, CRC Offset=\033[93m%04X\033[0m, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x150:0x158])[0])[2:-1].replace('\\x00',''), str(struct.unpack('8s',dataread[0x160:0x168])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x168:0x16C])[0]), 0x16E, struct.unpack('<H', dataread[0x16E:0x170])[0]))
             else:
                 print('Partition data without CRC')
 
