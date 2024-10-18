@@ -45,7 +45,7 @@
 CURRENT_VERSION = '5.8'
 
 import os, struct, sys, argparse, array
-from datetime import datetime
+from datetime import datetime, timezone
 import zlib
 import lzma
 import subprocess
@@ -1543,7 +1543,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         # Image Creation Timestamp
         fin.seek(start_offset + 8, 0)
         temp = struct.unpack('>I', fin.read(4))[0]
-        temp_parttype += ', created: ' + '\"\033[93m' + datetime.utcfromtimestamp(temp).strftime('%Y-%m-%d %H:%M:%S') + '\033[0m\"'
+        temp_parttype += ', created: ' + '\"\033[93m' + datetime.fromtimestamp(temp, timezone.utc).strftime('%Y-%m-%d %H:%M:%S') + '\033[0m\"'
 
         # Image Data Size
         temp = struct.unpack('>I', fin.read(4))[0]
