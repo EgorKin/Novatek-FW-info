@@ -42,7 +42,9 @@
 # V5.6 - print some additional info while unpack BCL1 partitions
 # V5.7 - make_ext4 is not need anymore and deprecated in modern distributives, move to img2simg
 # V5.8 - Fix CRC for uncompressed data partition before compress it to BCL1 partition if it is required
-CURRENT_VERSION = '5.8'
+# V5.9 - fix datetime.fromtimestamp() calls in actual Python versions
+# V6.0 - unassign uboot partition findings from partID=3. Add 'ARM Trusted Firmware-A' partition support
+CURRENT_VERSION = '6.0'
 
 import os, struct, sys, argparse, array
 from datetime import datetime, timezone
@@ -779,7 +781,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
         # Write marker byte as first symbol for the decoder
         outputbuf.append(marker)
-        #print("0x%02X" % marker)
+        #print("new LZ marker = 0x%02X" % marker)
 
         # Start of compression
         inpos = 0
@@ -1449,12 +1451,33 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
             part_type.append(temp_parttype)
             part_crc.append(0)
             part_crcCalc.append(CRC)
+
+            # перенес сюда получение названий партиций
+            fin.seek(start_offset, 0)
+            dtbfile = fin.read(part_size)
+            startat = dtbfile.find(b'NVTPACK_FW_INI_16072017')
+            if startat != -1:
+                fillIDPartNames(start_offset + startat)
+
             fin.close()
         return temp_parttype, CRC
 
 
+    # atf = ARM Trusted Firmware-A
+    if len(dtbpart_name) != 0 and dtbpart_name[partID] == 'atf':
+        temp_parttype = 'ARM Trusted Firmware'
+        CRC = 0
+        if addinfo:
+                part_type.append(temp_parttype)
+                part_crc.append(0)
+                part_crcCalc.append(CRC)
+                fin.close()
+        return temp_parttype, CRC
+
+
     # uboot
-    if partID == 3:
+    # if partID == 3: # ранее всегда 3 партиция - это uboot
+    if len(dtbpart_name) != 0 and dtbpart_name[partID] == 'uboot':
         temp_parttype = 'uboot'
         fin.seek(start_offset + 0x36E, 0)
         CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, part_size, 0x36E)
@@ -2212,9 +2235,9 @@ def main():
             GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a])
 
         # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
-        if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
-            # looking into dtb partition for partition id - name - filename info
-            SearchPartNamesInDTB(partitions_count)
+        #if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
+        #    # looking into dtb partition for partition id - name - filename info
+        #    SearchPartNamesInDTB(partitions_count)
         
         
         
