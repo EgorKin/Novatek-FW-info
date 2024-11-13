@@ -44,7 +44,9 @@
 # V5.8 - Fix CRC for uncompressed data partition before compress it to BCL1 partition if it is required
 # V5.9 - fix datetime.fromtimestamp() calls in actual Python versions
 # V6.0 - unassign uboot partition findings from partID=3. Add 'ARM Trusted Firmware-A' partition support
-CURRENT_VERSION = '6.0'
+# V6.1 - initial support of 'Multi-File Images' type for uImage partitions
+
+CURRENT_VERSION = '6.1'
 
 import os, struct, sys, argparse, array
 from datetime import datetime, timezone
@@ -200,8 +202,8 @@ def ShowInfoBanner():
     print("  Show full FW \033[93mi\033[0mnfo, allow e\033[93mx\033[0mtract/\033[93mr\033[0meplace/\033[93mu\033[0mncompress/\033[93mc\033[0mompress partitions, \033[93mfixCRC\033[0m")
     print("")
     print("  Copyright © 2023 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
-    print("")
-    print("  If you like this project, support me by donating: \033[92mhttps://paypal.me/egorkindv\033[0m")
+    print("  If you like this project, you may support me by donating:")
+    print("  \033[93mBTC\033[0m to: \033[92m12q5kucN1nvWq4gn5V3WJ8LFS6mtxbymdj\033[0m")
     print("===================================================================================")
 
 
@@ -1479,10 +1481,10 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
     # if partID == 3: # ранее всегда 3 партиция - это uboot
     if len(dtbpart_name) != 0 and dtbpart_name[partID] == 'uboot':
         temp_parttype = 'uboot'
-        fin.seek(start_offset + 0x36E, 0)
         CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, part_size, 0x36E)
         if addinfo:
             part_type.append(temp_parttype)
+            fin.seek(start_offset + 0x36E, 0)
             part_crc.append(struct.unpack('<H', fin.read(2))[0])
             part_crcCalc.append(CRC)
             fin.close()
@@ -1524,8 +1526,16 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         #		02				/* Image Type				*/	#define IH_TYPE_KERNEL	2	/* OS Kernel Image		*/
         #		00				/* Compression Type			*/	#define IH_COMP_NONE	0	/* No Compression Used	*/
         #		Linux-4.19.91	/* Image Name				*/
+        #
+        # ONLY for ih_type = 4 ('Multi-File Image'):
+        # Next goes list of Image sizes:
+        #   uint32_t   sizeof_uImage1 (rounded up to a multiple of 4 bytes)
+        #   ...
+        #   00 00 00 00 end of sizeof list marker
+        #
     if partfirst4bytes == 0x27051956:
         temp_parttype = 'uImage'
+        MultiFileImage_content = ''
 
         # Operating System
         fin.seek(start_offset + 28, 0)
@@ -1548,6 +1558,18 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         temp = struct.unpack('B', fin.read(1))[0]
         if temp in uImage_imagetype:
             temp_parttype += ', Image type: ' + '\"\033[93m' + uImage_imagetype[temp] + '\033[0m\"'
+            # 4 : 'Multi-File Image' For this type we need to parse all uImages data
+            if temp == 4:
+                currpos = fin.tell()
+                fin.seek(start_offset + 64, 0)
+                temp = struct.unpack('>I', fin.read(4))[0]
+                MultiFileImage_amount = 0
+                MultiFileImage_content = os.linesep + 'Contents:' + os.linesep
+                while(temp != 0):
+                    MultiFileImage_amount += 1
+                    MultiFileImage_content += 'Image ' + str(MultiFileImage_amount) + ': ' + '{:,}'.format(temp) + ' bytes' + os.linesep
+
+                fin.seek(currpos, 0) # back to previous read pos
         else:
             temp_parttype += ''
 
@@ -1571,6 +1593,10 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         # Image Data Size
         temp = struct.unpack('>I', fin.read(4))[0]
         temp_parttype += ', size: ' + '\"\033[93m{:,}\033[0m" bytes'.format(temp)
+
+        # print contents for Multi-File Images type
+        if MultiFileImage_content != '':
+            temp_parttype += MultiFileImage_content
 
         CRC = 0
         if addinfo:
