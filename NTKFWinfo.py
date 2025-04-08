@@ -4,7 +4,7 @@
 # NTKFWinfo - python script for work with Novatek firmware binary files
 # Show full FW info, allow extract/replace/uncompress/compress partitions, fix CRC
 #
-# Copyright © 2023 Dex9999(4pda.to) aka Dex aka EgorKin(GitHub, etc.)
+# Copyright © 2025 Dex9999(4pda.to) aka Dex aka EgorKin(GitHub, etc.)
 # ==================================================================================
 
 
@@ -45,8 +45,9 @@
 # V5.9 - fix datetime.fromtimestamp() calls in actual Python versions
 # V6.0 - unassign uboot partition findings from partID=3. Add 'ARM Trusted Firmware-A' partition support
 # V6.1 - initial support of 'Multi-File Images' type for uImage partitions
+# V6.2 - for ARM64 rootfs partition only (part name "rootfs" is hardcoded now): change compressior algo from "lzo" to "favor_lzo" to be more closer to original partition size than with "lzo". Add "sudo" to exec cmds for UBI partitions to be sure in right file permissions.
 
-CURRENT_VERSION = '6.1'
+CURRENT_VERSION = '6.2'
 
 import os, struct, sys, argparse, array
 from datetime import datetime, timezone
@@ -137,6 +138,7 @@ uImage_arch = {
     25: 'Xtensa',
     26: 'RISC-V'
 }
+is_ARM64 = 0 # unknown by default, flag for apply favor_lzo compression algo in UBI rootfs partition
 
 uImage_imagetype = {
     0 : 'Invalid Image',
@@ -201,8 +203,8 @@ def ShowInfoBanner():
     print("  \033[92mNTKFWinfo\033[0m - python script for work with Novatek firmware binary files. Ver. %s" % (CURRENT_VERSION))
     print("  Show full FW \033[93mi\033[0mnfo, allow e\033[93mx\033[0mtract/\033[93mr\033[0meplace/\033[93mu\033[0mncompress/\033[93mc\033[0mompress partitions, \033[93mfixCRC\033[0m")
     print("")
-    print("  Copyright © 2023 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
-    print("  If you like this project, you may support me by donating:")
+    print("  Copyright © 2025 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
+    print("  If you like this project or use it with commercial purposes you may donate")
     print("  \033[93mBTC\033[0m to: \033[92m12q5kucN1nvWq4gn5V3WJ8LFS6mtxbymdj\033[0m")
     print("===================================================================================")
 
@@ -343,7 +345,7 @@ def MemCheck_CalcCheckSum16Bit(input_file, in_offset, uiLen, ignoreCRCoffset):
 
 
 
-def compress_CKSM_UBI(part_nr, in2_file):
+def compress_CKSM_UBI(part_nr, in2_file, is_use_favor_lzo = 0):
     global in_file
 
     fin = open(in_file, 'rb')
@@ -383,7 +385,7 @@ def compress_CKSM_UBI(part_nr, in2_file):
 
     # delete tempfile
     subprocess.run('rm ' + '\"' + in2_file + '/tempfile' + '\"', shell=True)
-
+    
     # получим имя папки в которую была распакована партиция (пока я видел чисто цифровые имена, тоже что и image_seq -Q в выводе ubireader_utils_info)
     d = os.popen('(cd ' + '\"' + in2_file + '\"' + '&& find -maxdepth 1 -wholename "./*" -not -wholename "./temp*" -type d)').read()
 
@@ -398,8 +400,12 @@ def compress_CKSM_UBI(part_nr, in2_file):
     # fix ini-file: delete line "vol_flags=0" it cause error "unknown flags"
     subprocess.run('(cd ' + '\"' + in2_file + '/tempdir/tempfile/img-' + d + '\"' + ' && sed -i "/vol_flags = 0/d" img-' + d + '.ini)', shell=True)
 
-    # run compilation dir to ubi script    
-    subprocess.run('(cd ' + '\"' + in2_file + '/tempdir/tempfile/img-' + d + '\"' + ' && ./create_ubi_img-' + d + '.sh ../../../' + d + '/*)', shell=True)
+    # fix .sh file for ARM64 rootfs partition only: change compressior algo from "lzo" to "favor_lzo" to be more closer to original partition size than with "lzo"
+    if (is_use_favor_lzo == 1 and dtbpart_name[part_id[part_nr]] == 'rootfs'):
+        subprocess.run('(cd ' + '\"' + in2_file + '/tempdir/tempfile/img-' + d + '\"' + ' && sed -i "s/-x lzo/-x favor_lzo/" create_ubi_img-' + d + '.sh)', shell=True)
+
+    # run compilation dir to ubi script
+    subprocess.run('(cd ' + '\"' + in2_file + '/tempdir/tempfile/img-' + d + '\"' + ' && sudo ./create_ubi_img-' + d + '.sh ../../../' + d + '/*)', shell=True)
 
     # hide output print
     global is_silent
@@ -605,7 +611,7 @@ def compress_FDT(part_nr, in2_file):
 
 
 def compress(part_nr, in2_file):
-    global in_file
+    global in_file, is_ARM64
 
     fin = open(in_file, 'rb')
     fin.seek(part_startoffset[part_nr], 0)
@@ -619,7 +625,7 @@ def compress(part_nr, in2_file):
         # CKSM<--UBI#
         if FourCC == b'UBI#':
             fin.close()
-            compress_CKSM_UBI(part_nr, in2_file)
+            compress_CKSM_UBI(part_nr, in2_file, is_ARM64)
             return
 
         # CKSM<--BCL1
@@ -1122,7 +1128,7 @@ def uncompress(in_offset, out_filename, size):
 
     if FourCC == b'UBI#':
         #create dir with similar name as for other parttition types
-        os.system('rm -rf ' + '\"' + out_filename + '\"')
+        os.system('sudo rm -rf ' + '\"' + out_filename + '\"')
         os.system('mkdir ' + '\"' + out_filename + '\"')
 
         #extract UBI partition to tempfile
@@ -1134,7 +1140,7 @@ def uncompress(in_offset, out_filename, size):
         fpartout.close()
 
         #unpack UBIFS to created dir
-        os.system('ubireader_extract_files -k -i -f ' + '-o ' + '\"' + out_filename + '\"' + ' ' + '\"' + out_filename + '/tempfile' + '\"')
+        os.system('sudo ubireader_extract_files -k -i -f ' + '-o ' + '\"' + out_filename + '\"' + ' ' + '\"' + out_filename + '/tempfile' + '\"')
 
         # delete tempfile
         os.system('rm -rf ' + '\"' + out_filename + '/tempfile' + '\"')
@@ -1437,8 +1443,9 @@ def SearchPartNamesInDTB(partitions_count):
 
 def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
     global in_file
-    
-    
+    global is_ARM64
+
+
     fin = open(in_file, 'rb')
     # go to partition start offset
     fin.seek(start_offset, 0)
@@ -1550,6 +1557,10 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         temp = struct.unpack('B', fin.read(1))[0]
         if temp in uImage_arch:
             temp_parttype += ', CPU: ' + '\"\033[93m' + uImage_arch[temp] + '\033[0m\"'
+            if (uImage_arch[temp] == 'ARM64'):
+                is_ARM64 = 1
+            else:
+                is_ARM64 = 0
         else:
             temp_parttype += ''
 
@@ -2030,7 +2041,6 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
 
 def fixCRC(partID):
     global partitions_count
-    global total_file_size, orig_file_size
     
     for a in range(partitions_count):
         if part_id[a] == partID:
@@ -2081,10 +2091,7 @@ def fixCRC(partID):
     # fix CRC for whole file
     if FW_HDR2 == 1:
         # Выведем новый размер файла прошивки т.к. он изменился
-        if(total_file_size != orig_file_size):
-            print('Firmware file size \033[94m{:,}\033[0m bytes'.format(total_file_size))
-        else:
-            print('Firmware file size \033[92m{:,}\033[0m bytes'.format(total_file_size))
+        print('Firmware file size \033[94m{:,}\033[0m bytes'.format(total_file_size))
     
         CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, total_file_size, 0x24)
         if checksum_value == CRC_FW:
@@ -2101,10 +2108,7 @@ def fixCRC(partID):
     else:
         if FW_HDR == 1:
             # Выведем новый размер файла прошивки т.к. он изменился
-            if(total_file_size != orig_file_size):
-                print('Firmware file size \033[94m{:,}\033[0m bytes'.format(total_file_size))
-            else:
-                print('Firmware file size \033[92m{:,}\033[0m bytes'.format(total_file_size))
+            print('Firmware file size \033[94m{:,}\033[0m bytes'.format(total_file_size))
 
             CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
             if checksum_value == CRC_FW:
@@ -2129,7 +2133,7 @@ def main():
     global FW_HDR
     global FW_HDR2
     global NVTPACK_FW_HDR2_size
-    global total_file_size, orig_file_size
+    global total_file_size
     global checksum_value
     global NVTPACK_FW_HDR_AND_PARTITIONS_size
     global workdir
@@ -2158,10 +2162,7 @@ def main():
                         if struct.unpack('>H', fin.read(2))[0] == 0x1A50:
                             FW_HDR2 = 1
     
-    if FW_HDR2 == 1:
-        if is_silent != 1:
-            print("\033[93mNVTPACK_FW_HDR2\033[0m found")
-    else:
+    if FW_HDR2 != 1:
         print("\033[91mNVTPACK_FW_HDR2\033[0m not found")
         fin.seek(0, 0)
         if struct.unpack('>I', fin.read(4))[0] == 0x42434C31: # == BCL1
@@ -2197,7 +2198,6 @@ def main():
                 print('Found \033[93m%i\033[0m partitions' % (partitions_count))
 
                 total_file_size = os.path.getsize(in_file)
-                orig_file_size = total_file_size
                 print('Firmware file size \033[93m{:,}\033[0m bytes'.format(total_file_size))
 
                 # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
@@ -2228,6 +2228,9 @@ def main():
 
 
     if FW_HDR2 == 1:
+        if is_silent != 1:
+            print("\033[93mNVTPACK_FW_HDR2\033[0m found")
+
         # NVTPACK_FW_HDR2_VERSION check
         if struct.unpack('<I', fin.read(4))[0] == 0x16071515:
             if is_silent != 1:
@@ -2239,7 +2242,6 @@ def main():
         NVTPACK_FW_HDR2_size = struct.unpack('<I', fin.read(4))[0]
         partitions_count = struct.unpack('<I', fin.read(4))[0]
         total_file_size = struct.unpack('<I', fin.read(4))[0]
-        orig_file_size = total_file_size
         checksum_method = struct.unpack('<I', fin.read(4))[0]
         checksum_value = struct.unpack('<I', fin.read(4))[0]
         print('Found \033[93m%i\033[0m partitions' % partitions_count)
