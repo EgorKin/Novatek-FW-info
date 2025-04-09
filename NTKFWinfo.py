@@ -204,7 +204,7 @@ def ShowInfoBanner():
     print("  Show full FW \033[93mi\033[0mnfo, allow e\033[93mx\033[0mtract/\033[93mr\033[0meplace/\033[93mu\033[0mncompress/\033[93mc\033[0mompress partitions, \033[93mfixCRC\033[0m")
     print("")
     print("  Copyright © 2025 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
-    print("  If you like this project or use it with commercial purposes you may donate")
+    print("  If you like this project or use it with commercial purposes please donate some:")
     print("  \033[93mBTC\033[0m to: \033[92m12q5kucN1nvWq4gn5V3WJ8LFS6mtxbymdj\033[0m")
     print("===================================================================================")
 
@@ -2049,6 +2049,7 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
 
 def fixCRC(partID):
     global partitions_count
+    global total_file_size, orig_file_size
     
     for a in range(partitions_count):
         if part_id[a] == partID:
@@ -2099,7 +2100,10 @@ def fixCRC(partID):
     # fix CRC for whole file
     if FW_HDR2 == 1:
         # Выведем новый размер файла прошивки т.к. он изменился
-        print('Firmware file size \033[94m{:,}\033[0m bytes'.format(total_file_size))
+        if(total_file_size != orig_file_size):
+            print('Firmware file size \033[94m{:,}\033[0m bytes'.format(total_file_size))
+        else:
+            print('Firmware file size \033[92m{:,}\033[0m bytes'.format(total_file_size))
     
         CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, total_file_size, 0x24)
         if checksum_value == CRC_FW:
@@ -2116,7 +2120,10 @@ def fixCRC(partID):
     else:
         if FW_HDR == 1:
             # Выведем новый размер файла прошивки т.к. он изменился
-            print('Firmware file size \033[94m{:,}\033[0m bytes'.format(total_file_size))
+            if(total_file_size != orig_file_size):
+                print('Firmware file size \033[94m{:,}\033[0m bytes'.format(total_file_size))
+            else:
+                print('Firmware file size \033[92m{:,}\033[0m bytes'.format(total_file_size))
 
             CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
             if checksum_value == CRC_FW:
@@ -2141,7 +2148,7 @@ def main():
     global FW_HDR
     global FW_HDR2
     global NVTPACK_FW_HDR2_size
-    global total_file_size
+    global total_file_size, orig_file_size
     global checksum_value
     global NVTPACK_FW_HDR_AND_PARTITIONS_size
     global workdir
@@ -2206,6 +2213,7 @@ def main():
                 print('Found \033[93m%i\033[0m partitions' % (partitions_count))
 
                 total_file_size = os.path.getsize(in_file)
+                orig_file_size = total_file_size
                 print('Firmware file size \033[93m{:,}\033[0m bytes'.format(total_file_size))
 
                 # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
@@ -2250,6 +2258,7 @@ def main():
         NVTPACK_FW_HDR2_size = struct.unpack('<I', fin.read(4))[0]
         partitions_count = struct.unpack('<I', fin.read(4))[0]
         total_file_size = struct.unpack('<I', fin.read(4))[0]
+        orig_file_size = total_file_size                                
         checksum_method = struct.unpack('<I', fin.read(4))[0]
         checksum_value = struct.unpack('<I', fin.read(4))[0]
         print('Found \033[93m%i\033[0m partitions' % partitions_count)
