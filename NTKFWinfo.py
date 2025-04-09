@@ -345,8 +345,8 @@ def MemCheck_CalcCheckSum16Bit(input_file, in_offset, uiLen, ignoreCRCoffset):
 
 
 
-def compress_CKSM_UBI(part_nr, in2_file, is_use_favor_lzo = 0):
-    global in_file
+def compress_CKSM_UBI(part_nr, in2_file):
+    global in_file, is_ARM64
 
     fin = open(in_file, 'rb')
     fin.seek(part_startoffset[part_nr], 0)
@@ -401,8 +401,11 @@ def compress_CKSM_UBI(part_nr, in2_file, is_use_favor_lzo = 0):
     subprocess.run('(cd ' + '\"' + in2_file + '/tempdir/tempfile/img-' + d + '\"' + ' && sed -i "/vol_flags = 0/d" img-' + d + '.ini)', shell=True)
 
     # fix .sh file for ARM64 rootfs partition only: change compressior algo from "lzo" to "favor_lzo" to be more closer to original partition size than with "lzo"
-    if (is_use_favor_lzo == 1 and dtbpart_name[part_id[part_nr]] == 'rootfs'):
-        subprocess.run('(cd ' + '\"' + in2_file + '/tempdir/tempfile/img-' + d + '\"' + ' && sed -i "s/-x lzo/-x favor_lzo/" create_ubi_img-' + d + '.sh)', shell=True)
+    if (is_ARM64 == 1):
+        # Т.к. UBIname я нигде не храню, сделал проверку по pratition type
+        if dtbpart_name[part_id[part_nr]][:6] == 'rootfs':
+            #print('Use favor_lzo instead lzo')
+            subprocess.run('(cd ' + '\"' + in2_file + '/tempdir/tempfile/img-' + d + '\"' + ' && sed -i "s/-x lzo/-x favor_lzo/" create_ubi_img-' + d + '.sh)', shell=True)
 
     # run compilation dir to ubi script
     subprocess.run('(cd ' + '\"' + in2_file + '/tempdir/tempfile/img-' + d + '\"' + ' && sudo ./create_ubi_img-' + d + '.sh ../../../' + d + '/*)', shell=True)
@@ -611,7 +614,7 @@ def compress_FDT(part_nr, in2_file):
 
 
 def compress(part_nr, in2_file):
-    global in_file, is_ARM64
+    global in_file
 
     fin = open(in_file, 'rb')
     fin.seek(part_startoffset[part_nr], 0)
@@ -625,7 +628,7 @@ def compress(part_nr, in2_file):
         # CKSM<--UBI#
         if FourCC == b'UBI#':
             fin.close()
-            compress_CKSM_UBI(part_nr, in2_file, is_ARM64)
+            compress_CKSM_UBI(part_nr, in2_file)
             return
 
         # CKSM<--BCL1
@@ -1554,13 +1557,13 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
         # CPU architecture
         #fin.seek(part_offset[2] + 29, 0)
+        found_ARM64 = 0
         temp = struct.unpack('B', fin.read(1))[0]
         if temp in uImage_arch:
             temp_parttype += ', CPU: ' + '\"\033[93m' + uImage_arch[temp] + '\033[0m\"'
-            if (uImage_arch[temp] == 'ARM64'):
-                is_ARM64 = 1
-            else:
-                is_ARM64 = 0
+            # check for ARM64 architecture to use favor_lzo compr algo in UBI partitions
+            if (temp == 22): # and uImage_arch[temp] == 'ARM64'
+                found_ARM64 = 1
         else:
             temp_parttype += ''
 
@@ -1569,6 +1572,11 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         temp = struct.unpack('B', fin.read(1))[0]
         if temp in uImage_imagetype:
             temp_parttype += ', Image type: ' + '\"\033[93m' + uImage_imagetype[temp] + '\033[0m\"'
+
+            # for favor_lzo in UBI
+            if(temp == 2 and found_ARM64 == 1): # if uImage_os[temp] == 'OS Kernel Image':
+                is_ARM64 = 1
+            
             # 4 : 'Multi-File Image' For this type we need to parse all uImages data
             if temp == 4:
                 currpos = fin.tell()
