@@ -46,8 +46,9 @@
 # V6.0 - unassign uboot partition findings from partID=3. Add 'ARM Trusted Firmware-A' partition support
 # V6.1 - initial support of 'Multi-File Images' type for uImage partitions
 # V6.2 - for ARM64 rootfs partition only (part name "rootfs" is hardcoded now): change compressior algo from "lzo" to "favor_lzo" to be more closer to original partition size than with "lzo". Add "sudo" to exec cmds for UBI partitions to be sure in right file permissions.
+# V6.3 - output filename is optional now for -udtb/-cdtb commands (replace extension to .dts/.dtb in input filename if output filename is not defined)
 
-CURRENT_VERSION = '6.2'
+CURRENT_VERSION = '6.3'
 
 import os, struct, sys, argparse, array
 from datetime import datetime, timezone
@@ -75,6 +76,7 @@ dtbpart_ID = []
 dtbpart_name = []
 dtbpart_filename = []
 
+is_ARM64 = 0 # unknown by default, flag for apply favor_lzo compression algo in UBI rootfs partition
 
 # defines from uboot source code
 uImage_os = {
@@ -138,7 +140,6 @@ uImage_arch = {
     25: 'Xtensa',
     26: 'RISC-V'
 }
-is_ARM64 = 0 # unknown by default, flag for apply favor_lzo compression algo in UBI rootfs partition
 
 uImage_imagetype = {
     0 : 'Invalid Image',
@@ -204,7 +205,7 @@ def ShowInfoBanner():
     print("  Show full FW \033[93mi\033[0mnfo, allow e\033[93mx\033[0mtract/\033[93mr\033[0meplace/\033[93mu\033[0mncompress/\033[93mc\033[0mompress partitions, \033[93mfixCRC\033[0m")
     print("")
     print("  Copyright © 2025 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
-    print("  If you like this project or use it with commercial purposes please donate some:")
+    print("  If you like this project or use it with commercial purposes please donate some")
     print("  \033[93mBTC\033[0m to: \033[92m12q5kucN1nvWq4gn5V3WJ8LFS6mtxbymdj\033[0m")
     print("===================================================================================")
 
@@ -223,8 +224,8 @@ def get_args():
     p.add_argument('-r',metavar=('partID', 'offset', 'filename'), nargs=3, help='replace partition by ID with start offset using input file')
     p.add_argument('-u',metavar=('partID', 'offset'), type=int, nargs='+', help='uncompress partition by ID with optional start offset')
     p.add_argument('-c',metavar=('partID'), type=int, nargs=1, help='compress partition by ID to firmware input file and fixCRC')
-    p.add_argument('-udtb',metavar=('DTB_filename', 'DTS_filename'), nargs=2, help='convert DTB to DTS file')
-    p.add_argument('-cdtb',metavar=('DTS_filename', 'DTB_filename'), nargs=2, help='convert DTS to DTB file')
+    p.add_argument('-udtb',metavar=('DTB_filename', 'DTS_filename'), nargs='+', help='convert DTB to DTS file')
+    p.add_argument('-cdtb',metavar=('DTS_filename', 'DTB_filename'), nargs='+', help='convert DTS to DTB file')
     p.add_argument('-fixCRC', action='store_true', help='fix CRC values for all possible partitions and whole FW file')
     p.add_argument('-silent', action='store_true', help='do not print messages, except errors')
     p.add_argument('-o',metavar='outputdir', nargs=1, help='set working dir')
@@ -285,11 +286,17 @@ def get_args():
         is_uncompress_offset = -1
 
     if args.udtb:
-        uncompressDTB(args.udtb[0], args.udtb[1])
+        if len(args.udtb) == 2:
+            uncompressDTB(args.udtb[0], args.udtb[1])
+        else:
+            uncompressDTB(args.udtb[0])
         exit(0)
 
     if args.cdtb:
-        compressToDTB(args.cdtb[0], args.cdtb[1])
+        if len(args.cdtb) == 2:
+            compressToDTB(args.cdtb[0], args.cdtb[1])
+        else:
+            compressToDTB(args.cdtb[0])
         exit(0)
 
     if args.c:
@@ -446,7 +453,7 @@ def compress_CKSM_BCL(part_nr, in2_file):
         exit(0)
 
     # для BCL1 на вход должен подаваться файл
-    if not os.path.exists(in2_file):
+    if not os.path.isfile(in2_file):
         print('\033[91m%s file does not found, exit\033[0m' % in2_file)
         exit(0)
 
@@ -455,7 +462,7 @@ def compress_CKSM_BCL(part_nr, in2_file):
 
     comp_filename = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
     # проверим прошла ли упаковка успешно
-    if not os.path.exists(comp_filename):
+    if not os.path.isfile(comp_filename):
         print('\033[91m%s compressed partition file does not found, exit\033[0m' % comp_filename)
         exit(0)
 
@@ -500,7 +507,7 @@ def compress_CKSM_SPARSE(part_nr, in2_file):
         exit(0)
 
     # для сборки SPARSE нужно знать размер tempfile.ext4
-    if not os.path.exists(in2_file + '/tempfile.ext4'):
+    if not os.path.isfile(in2_file + '/tempfile.ext4'):
         print('\033[91m%s file does not found, exit\033[0m' % in2_file + '/tempfile.ext4')
         exit(0)
 
@@ -543,7 +550,7 @@ def compress_BCL(part_nr, in2_file):
         exit(0)
 
     # для BCL1 на вход должен подаваться файл
-    if not os.path.exists(in2_file):
+    if not os.path.isfile(in2_file):
         print('\033[91m%s file does not found, exit\033[0m' % in2_file)
         exit(0)
 
@@ -552,7 +559,7 @@ def compress_BCL(part_nr, in2_file):
 
     comp_filename = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
     # проверим прошла ли упаковка успешно
-    if not os.path.exists(comp_filename):
+    if not os.path.isfile(comp_filename):
         print('\033[91m%s compressed partition file does not found, exit\033[0m' % comp_filename)
         exit(0)
 
@@ -584,7 +591,7 @@ def compress_FDT(part_nr, in2_file):
         exit(0)
 
     # для FDT(DTB) на вход должен подаваться файл
-    if not os.path.exists(in2_file):
+    if not os.path.isfile(in2_file):
         print('\033[91m%s file does not found, exit\033[0m' % in2_file)
         exit(0)
 
@@ -593,7 +600,7 @@ def compress_FDT(part_nr, in2_file):
     os.system('sudo dtc -qq -I dts -O dtb ' + '\"' + in2_file + '\"' + ' -o ' + '\"' + comp_filename + '\"')
 
     # проверим прошла ли упаковка успешно
-    if not os.path.exists(comp_filename):
+    if not os.path.isfile(comp_filename):
         print('\033[91m%s compressed partition file does not found, exit\033[0m' % comp_filename)
         exit(0)
 
@@ -1078,13 +1085,15 @@ def updateProgressBar(value):
         print('')
 
 
-def uncompressDTB(in_file, out_filename):
+def uncompressDTB(in_file, out_filename = ''):
     fin = open(in_file, 'rb')
     FourCC = fin.read(4)
     fin.close()
 
     # check DTB magic
     if struct.unpack('>I', FourCC)[0] == 0xD00DFEED:
+        if out_filename == '':
+            out_filename = os.path.splitext(in_file)[0] + '.dts'
         #unpack DTB to DTS
         os.system('sudo dtc -qqq -I dtb -O dts ' + '\"' + in_file + '\"' + ' -o ' + '\"' + out_filename + '\"')
     else:
@@ -1092,7 +1101,9 @@ def uncompressDTB(in_file, out_filename):
         sys.exit(1)
 
 
-def compressToDTB(in_file, out_filename):
+def compressToDTB(in_file, out_filename = ''):
+    if out_filename == '':
+        out_filename = os.path.splitext(in_file)[0] + '.dtb'
     #pack to DTB
     os.system('sudo dtc -qqq -I dts -O dtb ' + '\"' + in_file + '\"' + ' -o ' + '\"' + out_filename + '\"')
 
@@ -1811,7 +1822,7 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
             part_nr = a
             break
     if part_nr != -1:
-        if not os.path.exists(is_replace_file):
+        if not os.path.isfile(is_replace_file):
             print('\033[91m%s file does not found, exit\033[0m' % is_replace_file)
             exit(0)
     
