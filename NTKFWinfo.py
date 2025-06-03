@@ -597,7 +597,7 @@ def compress_FDT(part_nr, in2_file):
 
     # compress uncomp_partitionID to comp_partitionID
     comp_filename = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
-    os.system('sudo dtc -qq -I dts -O dtb ' + '\"' + in2_file + '\"' + ' -o ' + '\"' + comp_filename + '\"')
+    os.system('dtc -qq -I dts -O dtb ' + '\"' + in2_file + '\"' + ' -o ' + '\"' + comp_filename + '\"')
 
     # проверим прошла ли упаковка успешно
     if not os.path.isfile(comp_filename):
@@ -1095,7 +1095,7 @@ def uncompressDTB(in_file, out_filename = ''):
         if out_filename == '':
             out_filename = os.path.splitext(in_file)[0] + '.dts'
         #unpack DTB to DTS
-        os.system('sudo dtc -qqq -I dtb -O dts ' + '\"' + in_file + '\"' + ' -o ' + '\"' + out_filename + '\"')
+        os.system('dtc -qqq -I dtb -O dts ' + '\"' + in_file + '\"' + ' -o ' + '\"' + out_filename + '\"')
     else:
         print("\033[91mDTB marker not found, exit\033[0m")
         sys.exit(1)
@@ -1105,7 +1105,7 @@ def compressToDTB(in_file, out_filename = ''):
     if out_filename == '':
         out_filename = os.path.splitext(in_file)[0] + '.dtb'
     #pack to DTB
-    os.system('sudo dtc -qqq -I dts -O dtb ' + '\"' + in_file + '\"' + ' -o ' + '\"' + out_filename + '\"')
+    os.system('dtc -qqq -I dts -O dtb ' + '\"' + in_file + '\"' + ' -o ' + '\"' + out_filename + '\"')
 
 
 def uncompress(in_offset, out_filename, size):
@@ -1128,7 +1128,7 @@ def uncompress(in_offset, out_filename, size):
         fpartout.close()
         
         #unpack DTB to DTS
-        os.system('sudo dtc -qqq -I dtb -O dts ' + '\"' + out_filename + '_tempfile' + '\"' + ' -o ' + '\"' + out_filename + '\"')
+        os.system('dtc -qqq -I dtb -O dts ' + '\"' + out_filename + '_tempfile' + '\"' + ' -o ' + '\"' + out_filename + '\"')
         
         # delete tempfile
         os.system('rm -rf ' + '\"' + out_filename + '_tempfile' + '\"')
@@ -2163,9 +2163,7 @@ def main():
     global checksum_value
     global NVTPACK_FW_HDR_AND_PARTITIONS_size
     global workdir
-    
-    partitions_count = 0
-    fin = open(in_file, 'rb')
+
 
     # for color output support in Windows
     if platform.system() == 'Windows':
@@ -2175,10 +2173,16 @@ def main():
     if is_silent != 1:
         ShowInfoBanner()
 
+    if not os.path.exists(in_file):
+        print('\033[91m%s input file does not found, exit\033[0m' % in_file)
+        exit(0)
+
+    partitions_count = 0
+    fin = open(in_file, 'rb')
 
     FW_HDR = 0
     FW_HDR2 = 0
-    
+
     # NVTPACK_FW_HDR2 GUID check
     if struct.unpack('<I', fin.read(4))[0] == 0xD6012E07:
         if struct.unpack('<H', fin.read(2))[0] == 0x10BC:
@@ -2187,7 +2191,7 @@ def main():
                     if struct.unpack('>I', fin.read(4))[0] == 0x352F8226:
                         if struct.unpack('>H', fin.read(2))[0] == 0x1A50:
                             FW_HDR2 = 1
-    
+
     if FW_HDR2 != 1:
         print("\033[91mNVTPACK_FW_HDR2\033[0m not found")
         fin.seek(0, 0)
