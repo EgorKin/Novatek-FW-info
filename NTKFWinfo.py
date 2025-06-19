@@ -47,8 +47,10 @@
 # V6.1 - initial support of 'Multi-File Images' type for uImage partitions
 # V6.2 - for ARM64 rootfs partition only (part name "rootfs" is hardcoded now): change compressior algo from "lzo" to "favor_lzo" to be more closer to original partition size than with "lzo". Add "sudo" to exec cmds for UBI partitions to be sure in right file permissions.
 # V6.3 - output filename is optional now for -udtb/-cdtb commands (replace extension to .dts/.dtb in input filename if output filename is not defined)
+# V6.4 - Do not change BCL1 unpacked partition size values in BCL1 header if a new partition unpacked size is less than before to be more closer to original bytes. Refactor BCL1_compress() function.
+# V6.5 - Initial support bootloader update files (LDxxxxA.bin) - NOT TESTED! DO NOT USE IT FOR REFLASH YOUR DEVICES! WRONG BOOTLOADER MAY BRICK YOUR HARDWARE!
 
-CURRENT_VERSION = '6.3'
+CURRENT_VERSION = '6.5'
 
 import os, struct, sys, argparse, array
 from datetime import datetime, timezone
@@ -465,7 +467,7 @@ def compress_CKSM_BCL(part_nr, in2_file):
     if not os.path.isfile(comp_filename):
         print('\033[91m%s compressed partition file does not found, exit\033[0m' % comp_filename)
         exit(0)
-
+    
     # hide output print
     global is_silent
     is_silent = 1
@@ -475,7 +477,7 @@ def compress_CKSM_BCL(part_nr, in2_file):
 
     # delete comp_partitionID file
     subprocess.run('rm -rf ' + '\"' + comp_filename + '\"', shell=True)
-    
+
     # fix CRC for CKSM
     is_silent = 0
     fixCRC(part_id[part_nr])
@@ -540,6 +542,7 @@ def compress_CKSM_SPARSE(part_nr, in2_file):
 
 def compress_BCL(part_nr, in2_file):
     global in_file
+    global FW_BOOTLOADER
 
     fin = open(in_file, 'rb')
     fin.seek(part_startoffset[part_nr], 0)
@@ -573,6 +576,25 @@ def compress_BCL(part_nr, in2_file):
     # delete comp_partitionID file
     subprocess.run('rm -rf ' + '\"' + comp_filename + '\"', shell=True)
     
+     # check total file size in bootloader header and append 00 if need
+    if FW_BOOTLOADER == 1:
+        filesize = os.path.getsize(in_file)
+        fin = open(in_file, 'r+b')
+        fin.seek(0x24, 0)
+        file_size_from_header = struct.unpack('<I', fin.read(4))[0] # read proper filesize from header
+        #print(file_size_from_header)
+        #print(filesize)
+        # если в заголовке bootloader прописан бОльший размер файла то дополним 00
+        if file_size_from_header > filesize:
+            fin.seek(0, 2) # go to the end of file
+            fin.write(b'\x00' * (file_size_from_header - filesize))
+            fin.close()
+        else:
+            if filesize > file_size_from_header:
+                print('\033[91mFatal error: New bootlader file size exeed initial limit\033[0m')
+                fin.close()
+                exit(0)
+
     # fix CRC
     is_silent = 0
     fixCRC(part_id[part_nr])
@@ -669,6 +691,7 @@ def compress(part_nr, in2_file):
 
 def BCL1_compress(part_nr, in_offset, in2_file):
     global in_file
+    global FW_BOOTLOADER
 
     fin = open(in_file, 'rb')
 
@@ -688,6 +711,9 @@ def BCL1_compress(part_nr, in_offset, in2_file):
     if (Algorithm != 0x09) & (Algorithm != 0x0B) & (Algorithm != 0x0C):
         print("\033[91mCompression algo %0X is not supported\033[0m" % Algorithm)
         sys.exit(1)
+
+    unpacked_part_size = struct.unpack('>I', fin.read(4))[0] # read from input file BCL1 unpacked partition size
+    #packed_part_size = struct.unpack('>I', fin.read(4))[0] # read from input file BCL1 packed partition size
 
     # read LZMA Dictionary size - 4 байта в заголовке LZMA
     if (Algorithm == 0x0B):
@@ -779,18 +805,11 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         #print("new marker byte = 0x%02X" % marker)
 
 
-        fout = open(out, 'w+b')
-        fout.write(struct.pack('>I', 0x42434C31)) # write BCL1
-        fout.write(struct.pack('<H', 0x0000)) # write new CRC, unknown now - rewrite on step 2 after compression
-        fout.write(struct.pack('>H', Algorithm)) # write Algorithm
-        fout.write(struct.pack('>I', insize)) # write unpacked size
-        fout.write(struct.pack('>I', 0)) # write packed size, unknown now - rewrite on step 1 after compression
-
         # Lower values give faster compression, while higher values gives better compression.
-        # 100000 дает байт в байт такое же сжатие как у всех оригинальных прошивок
+        # 100000 дает байт в байт такое же сжатие как у всех старых оригинальных прошивок
         LZ_MAX_OFFSET = 100000
 
-        outputbuf = bytearray()
+        compressed_data = bytearray()
 
         # для замеров скорости выполнения
         startT = datetime.now()
@@ -798,7 +817,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         oldcurrprogress = 0
 
         # Write marker byte as first symbol for the decoder
-        outputbuf.append(marker)
+        compressed_data.append(marker)
         #print("new LZ marker = 0x%02X" % marker)
 
         # Start of compression
@@ -854,7 +873,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                 ((bestlength == 5) & (bestoffset <= 0x00003fff)) |
                 ((bestlength == 6) & (bestoffset <= 0x001fffff)) |
                 ((bestlength == 7) & (bestoffset <= 0x0fffffff)) ):
-                    outputbuf.append(marker)
+                    compressed_data.append(marker)
                     #print("0x%08X : 0x%02X" % (outpos, marker))
                     outpos += 1
 
@@ -884,7 +903,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
                     while num_bytes > 0:
                         #print("0x%02X" % ((buf>>(8*(num_bytes - 1)))&0xFF))
-                        outputbuf.append((buf>>(8*(num_bytes - 1)))&0xFF)
+                        compressed_data.append((buf>>(8*(num_bytes - 1)))&0xFF)
                         num_bytes -= 1
 
                     #print("offset = 0x%08X" % bestoffset)
@@ -913,7 +932,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
                     while num_bytes > 0:
                         #print("0x%02X" % ((buf>>(8*(num_bytes - 1)))&0xFF))
-                        outputbuf.append((buf>>(8*(num_bytes - 1)))&0xFF)
+                        compressed_data.append((buf>>(8*(num_bytes - 1)))&0xFF)
                         num_bytes -= 1
 
                     inpos += bestlength
@@ -922,11 +941,11 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                 # Output single byte (or two bytes if marker byte)
                 symbol = dataread[ inpos ]
                 inpos += 1
-                outputbuf.append(symbol)
+                compressed_data.append(symbol)
                 #print("0x%02X" % symbol)
                 outpos += 1
                 if symbol == marker:
-                    outputbuf.append(0)
+                    compressed_data.append(0)
                     #print("0x00")
                     outpos += 1
                 bytesleft -= 1
@@ -940,138 +959,98 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         # Dump remaining bytes, if any
         while inpos < insize:
             if dataread[ inpos ] == marker:
-                outputbuf.append(marker)
+                compressed_data.append(marker)
                 #print("0x%02X" % marker)
                 outpos += 1
-                outputbuf.append(0)
+                compressed_data.append(0)
                 #print("0x00")
                 outpos += 1
             else:
-                outputbuf.append(dataread[ inpos ])
+                compressed_data.append(dataread[ inpos ])
                 #print("0x%02X" % dataread[ inpos ])
                 outpos += 1
             inpos += 1
 
-        fout.write(outputbuf)
-
-        # надо дописать к сжатым данным 00... для выравнивания по 4 байтам
-        # для всех новых прошивок или более старой версии прошивок (BCL1 + NVTPACK_FW_HDR) для самой первой партиции или для просто прошивки из одного BCL1
-        addsize = 0
-        if (FW_HDR2 == 1) | ((FW_HDR == 1) & (part_id[part_nr] == 0)) | (FW_HDR == 0):
-            addsize = (len(outputbuf) % 4)
-            if addsize != 0:
-                addsize = 4 - addsize
-
-                # добавим сколько надо 00 для выравнивания до 4 байт
-                for b in range(addsize):
-                    fout.write(struct.pack('B', 0))
-                outpos += addsize
-        fout.close()
-        #print("Compression to LZ BCL1 successfull")
-
-        fout = open(out, 'r+b')
-        fout.seek(12, 0)
-        fout.write(struct.pack('>I', outpos)) # write compressed data size to BCL1 header
-        fout.close()
-
         endT = datetime.now()
         print("elapsed: %s" % str(endT - startT))
+        # compressed_data is ready to save now
 
-        # пересчитываем CRC для BCL1-заголовка только после того как все остальное кроме CRC уже записали
-        newCRC = MemCheck_CalcCheckSum16Bit(out, 0, outpos + 16, 0x4)
-        fout = open(out, 'r+b')
-        fout.seek(4, 0)
-        fout.write(struct.pack('<H', newCRC)) # write new CRC value
-        fout.close()
-        return
 
     # LZMA compress
     if Algorithm == 0x0B:
         #print("LZMA_DictSize=0x%08X" % LZMA_DictSize)
 
         # lzma.exe e -a1 -d20 -mfbt4 -fb40 -mc36 -lc3 -lp0 -pb2 infile outfile
-        ##fast_bytes = 40
-        ##search_depth = 16 + fast_bytes//2 # depth search формула для любого из MF_BT*
-        ##my_filters = [{"id":lzma.FILTER_LZMA1, "mode":lzma.MODE_NORMAL, "dict_size":LZMA_DictSize, "mf":lzma.MF_BT4, "nice_len":fast_bytes, "depth":search_depth, "lc":3, "lp":0, "pb":2}]
+        fast_bytes = 40
+        search_depth = 16 + fast_bytes//2 # depth search формула для любого из MF_BT*
+        my_filters = [{"id":lzma.FILTER_LZMA1, "mode":lzma.MODE_NORMAL, "dict_size":LZMA_DictSize, "mf":lzma.MF_BT4, "nice_len":fast_bytes, "depth":search_depth, "lc":3, "lp":0, "pb":2}]
         
-        ##compress = lzma.compress(dataread, format = lzma.FORMAT_ALONE, filters = my_filters) # но пока что filters не работает с pypy3 и это все равно не дает байт в байт сжатие как lzma.exe
-        compress = lzma.compress(dataread, format = lzma.FORMAT_ALONE)
+        compressed_data = lzma.compress(dataread, format = lzma.FORMAT_ALONE, filters = my_filters) # но пока что filters не работает с pypy3 и это все равно не дает байт в байт сжатие как lzma.exe
+        ##compressed_data = lzma.compress(dataread, format = lzma.FORMAT_ALONE)
+        # compressed_data is ready to save now
 
-        # надо дописать к сжатым данным 00... для выравнивания по 4 байтам
-        # но делаю это только если нулевая партиция (без этого NVTPACK_FW_HDR будет не выровнен)
-        addsize = 0
-        if part_id[part_nr] == 0:
-            addsize = (len(outputbuf) % 4)
-            if addsize != 0:
-                addsize = 4 - addsize
-
-        fout = open(out, 'w+b')
-        fout.write(struct.pack('>I', 0x42434C31)) # write BCL1
-        fout.write(struct.pack('<H', 0x0000)) # write new CRC, unknown now - rewrite after compression
-        fout.write(struct.pack('>H', Algorithm)) # write Algorithm
-        fout.write(struct.pack('>I', len(dataread))) # write unpacked size
-        fout.write(struct.pack('>I', len(compress) + addsize)) # write packed size
-
-        fout.write(compress) # write compressed data
-
-        # добавим сколько надо 00 для выравнивания до 4 байт
-        for b in range(addsize):
-            fout.write(struct.pack('B', 0))
-        fout.close()
-
-        # исправим в LZMA заголовке данные о Unpacked size - в LZMA-библиотеке python они всегда записываются как FF FF FF FF
-        # в стандарте указано что это одно 64-битное число но во всех прошивках идет дублирование 2-х 32-битных чисел
-        ##fout = open(out, 'r+b')
-        ##fout.seek(0x15, 0)
-        ##if (LZMA_UncompSize1 == LZMA_UncompSize2):
-        ##    # если дублирование
-        ##    fout.write(struct.pack('<II', len(dataread), len(dataread)))
-        ##else:
-        ##    # если по стандарту 64 бита
-        ##    fout.write(struct.pack('<II', len(dataread)&0xFFFFFFFF, (len(dataread)>>32)&0xFFFFFFFF))
-        ##fout.close()
-
-        # пересчитываем CRC для BCL1-заголовка только после того как все остальное кроме CRC уже записали
-        newCRC = MemCheck_CalcCheckSum16Bit(out, 0, len(compress) + addsize + 16, 0x4)
-        fout = open(out, 'r+b')
-        fout.seek(4, 0)
-        fout.write(struct.pack('<H', newCRC)) # write new CRC value
-        fout.close()
-        return
 
     # ZLIB compress
     if Algorithm == 0x0C:
-        compress = zlib.compress(dataread)
+        compressed_data = zlib.compress(dataread)
+        # compressed_data is ready to save now
 
-        # надо дописать к сжатым данным 00... для выравнивания по 4 байтам
-        # но делаю это только если нулевая партиция (без этого NVTPACK_FW_HDR будет не выровнен)
-        addsize = 0
-        if part_id[part_nr] == 0:
-            addsize = (len(outputbuf) % 4)
-            if addsize != 0:
-                addsize = 4 - addsize
 
-        fout = open(out, 'w+b')
-        fout.write(struct.pack('>I', 0x42434C31)) # write BCL1
-        fout.write(struct.pack('<H', 0x0000)) # write new CRC, unknown now - rewrite after compression
-        fout.write(struct.pack('>H', Algorithm)) # write Algorithm
-        fout.write(struct.pack('>I', len(dataread))) # write unpacked size
-        fout.write(struct.pack('>I', len(compress) + addsize)) # write packed size
- 
-        fout.write(compress) # write compressed data
+    # save compressed_data to BCL1 and write correct header info
+    fout = open(out, 'w+b')
+    fout.write(struct.pack('>I', 0x42434C31)) # write BCL1 magic bytes
+    fout.write(struct.pack('<H', 0x0000)) # write new CRC, unknown yet - rewrite after compression
+    fout.write(struct.pack('>H', Algorithm)) # write compression algorithm
 
-        # добавим сколько надо 00 для выравнивания до 4 байт
-        for b in range(addsize):
-            fout.write(struct.pack('B', 0))
-        fout.close()
-        
-        # пересчитываем CRC для BCL1-заголовка только после того как все остальное кроме CRC уже записали
-        newCRC = MemCheck_CalcCheckSum16Bit(out, 0, len(compress) + addsize + 0x10, 0x4)
+    # есть прошивки (и их много) где написано что BCL1 партиция должна быть распакована в размер, больший чем есть распакованных данных. Т.е. надо бы при распаковке дописывать нули в конец
+    # но тогда при запаковке обратно размер сжимаемых данных будет больше чем исходный размер данных
+    # поэтому распаковываем без добавления нулей а при упаковке обратно запишем бОльший размер в unpacked partition size чтобы меньше различий в байтах было с оригиналом (больше это ни на что не влияет вообще)
+    if unpacked_part_size > len(dataread):
+        fout.write(struct.pack('>I', unpacked_part_size)) # write BCL1 unpacked partition size
+    else:
+        fout.write(struct.pack('>I', len(dataread))) # write BCL1 unpacked partition size
+
+    # надо дописать к сжатым данным 00... для выравнивания по 4 байтам
+    # для всех новых прошивок или более старой версии прошивок (BCL1 + NVTPACK_FW_HDR) для самой первой партиции или для просто прошивки из одного BCL1
+    addsize = 0
+    if (FW_HDR2 == 1) | ((FW_HDR == 1) & (part_id[part_nr] == 0)) | (FW_HDR == 0):
+        addsize = (len(compressed_data) % 4)
+        if addsize != 0:
+            addsize = 4 - addsize
+
+    fout.write(struct.pack('>I', len(compressed_data) + addsize)) # write BCL1 packed partition size
+
+    fout.write(compressed_data) # write compressed data
+
+    # добавим сколько надо 00 для выравнивания до 4 байт
+    if addsize > 0:
+        fout.write(b'\x00' * addsize)
+    fout.close()
+
+    # исправим в LZMA заголовке данные о Unpacked size - в LZMA-библиотеке python они всегда записываются как FF FF FF FF FF FF FF FF
+    # в стандарте указано что это одно 64-битное число но в старых прошивках идет дублирование 2-х 32-битных чисел (в новых прошивках это исправили - идет нормальное 64-битное значение)
+    #if Algorithm == 0x0B:
+    #    fout = open(out, 'r+b')
+    #    fout.seek(0x15, 0)
+    #    if (LZMA_UncompSize1 == LZMA_UncompSize2):
+    #        # если в оригинальном файле есть дублирование
+    #        if LZMA_UncompSize1 == 0xFFFFFFFF:
+    #            fout.write(struct.pack('<II', 0xFFFFFFFF, 0xFFFFFFFF))
+    #        else:
+    #            fout.write(struct.pack('<II', len(dataread)&0xFFFFFFFF, len(dataread)&0xFFFFFFFF))
+    #    else:
+    #        # если по стандарту 64 бита
+    #        fout.write(struct.pack('<II', len(dataread)&0xFFFFFFFF, (len(dataread)>>32)&0xFFFFFFFF))
+    #    fout.close()
+
+    # пересчитываем CRC для BCL1-заголовка только после того как все остальное кроме CRC уже записали
+    # но не для bootloader (у них у всех прописано 00 00)
+    if FW_BOOTLOADER == 0:
+        newCRC = MemCheck_CalcCheckSum16Bit(out, 0, len(compressed_data) + addsize + 16, 0x4)
         fout = open(out, 'r+b')
         fout.seek(4, 0)
         fout.write(struct.pack('<H', newCRC)) # write new CRC value
         fout.close()
-        return
 
 
 
@@ -1189,7 +1168,12 @@ def uncompress(in_offset, out_filename, size):
     fin.close()
 
 
-
+# BCL1 header 16 bytes len:
+# "BCL1" marker
+# 2 bytes - CRC
+# 2 bytes in BE - compression algo
+# 4 bytes in BE - uncompressed partition size (can be appended with leading zeroes after uncompressed data)
+# 4 bytes in BE - compressed partition size
 def BCL1_uncompress(in_offset, out_filename):
     global in_file
 
@@ -1311,6 +1295,11 @@ def BCL1_uncompress(in_offset, out_filename):
             #    oldcurrprogress = currprogress
 
         fout.write(outputbuf)
+        # add zero bytes to make same output size that was decleared in BCL1 header
+        # commented due extend partition size then compressing back more data than need
+        #append_size = outsize - len(outputbuf)
+        #if append_size > 0:
+        #    fout.write(b'\x00' * append_size)
         fin.close()
         fout.close()
 
@@ -1325,6 +1314,11 @@ def BCL1_uncompress(in_offset, out_filename):
         
         decompress = decompress_lzma(dataread)[:outsize]
         fout.write(decompress)
+        # add zero bytes to make same output size that was decleared in BCL1 header as BCL1 unpacked size (outsize)
+        # commented due extend partition size then compressing back more data than need
+        #append_size = outsize - len(decompress)
+        #if append_size > 0:
+        #    fout.write(b'\x00' * append_size)
         fout.close()
 
 
@@ -1334,6 +1328,11 @@ def BCL1_uncompress(in_offset, out_filename):
         fin.close()
         
         decompress = zlib.decompress(dataread)
+        # add zero bytes to make same output size that was decleared in BCL1 header
+        # commented due extend partition size then compressing back more data than need
+        #append_size = outsize - len(decompress)
+        #if append_size > 0:
+        #    fout.write(b'\x00' * append_size)
         fout.write(decompress)
         fout.close()
 
@@ -1458,6 +1457,7 @@ def SearchPartNamesInDTB(partitions_count):
 def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
     global in_file
     global is_ARM64
+    global FW_BOOTLOADER
 
 
     fin = open(in_file, 'rb')
@@ -1683,15 +1683,19 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         # compression algo
         compressAlgo = struct.unpack('>H', fin.read(2))[0]
         if compressAlgo in compressAlgoTypes:
-            temp_parttype += ', \033[93m' + compressAlgoTypes[compressAlgo] + '\033[0m'
+            temp_parttype += '[\033[93m' + compressAlgoTypes[compressAlgo] + '\033[0m]'
         else:
-            temp_parttype += ', \033[91mcomp.algo:0x%0X\033[0m' % compressAlgo
+            temp_parttype += '[\033[91mcomp.algo:0x%0X\033[0m' % compressAlgo + ']'
 
-        unpackedSize = struct.unpack('>I', fin.read(4))[0]
-        packedSize = struct.unpack('>I', fin.read(4))[0]
-        temp_parttype += ' \033[93m{:,}\033[0m'.format(unpackedSize) + ' packed to ' + '\033[93m{:,}\033[0m bytes'.format(packedSize)
+        BCL1unpackedSize = struct.unpack('>I', fin.read(4))[0]
+        BCL1packedSize = struct.unpack('>I', fin.read(4))[0]
+        temp_parttype += ' \033[93m{:,}\033[0m'.format(BCL1unpackedSize) + ' packed to ' + '\033[93m{:,}\033[0m bytes'.format(BCL1packedSize)
 
-        CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, packedSize + 0x10, 0x4)
+        CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, BCL1packedSize + 0x10, 0x4)
+
+        # у всех виденных мною загрузчиков только 1 партиция BCL1 и у неё вместо CRC прописано 0000 поэтому для неё не показываем расчитанную CRC чтобы не смущать пользователя их вечным несоответствием
+        if FW_BOOTLOADER == 1:
+            CRC = 0
 
         if addinfo:
             part_type.append(temp_parttype)
@@ -1976,7 +1980,9 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
 
                     filesize = os.path.getsize(in_file)
                     # TotalSize в NVTPACK_FW_HDR не меняется т.к. в нем только размеры заголовков
-                    total_file_size = filesize # корректируем данные в нашей переменной
+                    # для загрузчика файл будет дополнен 00 до требуемого размера чуть позже
+                    if FW_BOOTLOADER == 0:
+                        total_file_size = filesize # корректируем данные в нашей переменной
 
                     # если заменяем CKSM-партицию то в её заголовке нужно исправить DataSize
                     if part_type[part_nr][:13] == '\033[93mCKSM\033[0m':
@@ -2061,6 +2067,7 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
 def fixCRC(partID):
     global partitions_count
     global total_file_size, orig_file_size
+    global FW_BOOTLOADER
     
     for a in range(partitions_count):
         if part_id[a] == partID:
@@ -2097,13 +2104,15 @@ def fixCRC(partID):
                     break
                 # fix CRC for BCL1
                 if part_type[a][:13] == '\033[93mBCL1\033[0m':
-                    fin = open(in_file, 'r+b')
-                    fin.seek(part_startoffset[a] + 0x4, 0)
-                    fin.write(struct.pack('<H', calcCRC))
-                    fin.close()
-                    if is_silent != 1:
-                        print('Partition ID ' + str(part_id[a]) + ' - \033[94mCRC fixed\033[0m')
-                    break
+                    # do not fix CRC for bootloader yet
+                    if FW_BOOTLOADER == 0:
+                        fin = open(in_file, 'r+b')
+                        fin.seek(part_startoffset[a] + 0x4, 0)
+                        fin.write(struct.pack('<H', calcCRC))
+                        fin.close()
+                        if is_silent != 1:
+                            print('Partition ID ' + str(part_id[a]) + ' - \033[94mCRC fixed\033[0m')
+                        break
             else:
                 if is_silent != 1:
                     print('Partition ID ' + str(part_id[a]) + ' - fix CRC not required')
@@ -2147,6 +2156,26 @@ def fixCRC(partID):
                 fin.close()
                 if is_silent != 1:
                     print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
+        else:
+            if FW_BOOTLOADER == 1:
+                # Выведем новый размер файла прошивки т.к. он изменился
+                total_file_size = os.path.getsize(in_file)
+                if(total_file_size != orig_file_size):
+                    print('Bootloader file size \033[94m{:,}\033[0m bytes'.format(total_file_size))
+                else:
+                    print('Bootloader file size \033[92m{:,}\033[0m bytes'.format(total_file_size))
+    
+                CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, total_file_size, 0x32)
+                if checksum_value == CRC_FW:
+                    if is_silent != 1:
+                        print('Bootloader file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+                else:
+                    fin = open(in_file, 'r+b')
+                    fin.seek(0x32, 0) # for bootloader only
+                    fin.write(struct.pack('<H', CRC_FW))
+                    fin.close()
+                    if is_silent != 1:
+                        print('Bootloader file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
 
 
 
@@ -2158,6 +2187,7 @@ def main():
     global partitions_count
     global FW_HDR
     global FW_HDR2
+    global FW_BOOTLOADER
     global NVTPACK_FW_HDR2_size
     global total_file_size, orig_file_size
     global checksum_value
@@ -2182,6 +2212,7 @@ def main():
 
     FW_HDR = 0
     FW_HDR2 = 0
+    FW_BOOTLOADER = 0
 
     # NVTPACK_FW_HDR2 GUID check
     if struct.unpack('<I', fin.read(4))[0] == 0xD6012E07:
@@ -2254,7 +2285,58 @@ def main():
                 GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a])
         else:
             print("\033[91mBCL1\033[0m not found")
-            exit(0) # ничего не найдено
+
+            # проверим может это файл загрузчика LD9xxxxA.bin
+            fin.seek(0, 0)
+            first2bytes = struct.unpack('>H', fin.read(2))[0] # 28 00
+            if first2bytes == 0x2800:
+                read1 = struct.unpack('>H', fin.read(2))[0]
+                fin.read(2)
+                read2 = struct.unpack('>H', fin.read(2))[0]
+                BCL1_offset = struct.unpack('<I', fin.read(4))[0] # in bootloader - here is a offset to start BCL1 partition
+                constant = struct.unpack('>I', fin.read(4))[0] # always 00 05 80 E0
+                fin.read(2)
+                read3 = struct.unpack('>H', fin.read(2))[0]
+                fin.seek(0x30, 0) # goto 55AA offset
+                read55AA = struct.unpack('>H', fin.read(2))[0]
+                if read1 == read2 and read1 == read3 and constant == 0x000580E0 and read55AA == 0x55AA:
+                    # all OK, it is a bootloader
+                    print('Input file detects as \033[93mBOOTLOADER\033[0m')
+                    FW_BOOTLOADER = 1
+
+                    part_startoffset.append(BCL1_offset)
+                    fin.seek(BCL1_offset + 0xC, 0)
+                    part_size.append(struct.unpack('>I', fin.read(4))[0] + 0x10)  # + 0x10 потому что мы будем показывать размер партиции с заголовком а не размер данных внутри BCL1
+                    part_id.append(0)
+                    part_endoffset.append(BCL1_offset + part_size[0])
+
+                    fin.seek(0x24, 0)
+                    orig_file_size = struct.unpack('<I', fin.read(4))[0] # read proper filesize from header
+                    total_file_size = os.path.getsize(in_file)
+                    print('Bootloader required file size \033[93m{:,}\033[0m bytes'.format(orig_file_size), end='')
+                    if(total_file_size != orig_file_size):
+                        print(', this file size \033[94m{:,}\033[0m bytes'.format(total_file_size))
+                    else:
+                        print(', this file size \033[92m{:,}\033[0m bytes'.format(total_file_size))
+
+                    # тоже обязательно всегда считать - checksum_value глобальная переменная с CRC всего файла, используется при замене партиций для пересчета CRC всего файла, у загрузчика тоже
+                    fin.seek(0x32, 0)
+                    checksum_value = struct.unpack('<H', fin.read(2))[0] # read CRC as little-endian
+                    # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
+                    if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
+                        CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, orig_file_size, 0x32)
+                        if checksum_value == CRC_FW:
+                            print('Bootloader file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+                        else:
+                            print('Bootloader file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m' % (checksum_value, CRC_FW))
+
+                    bootpart, somecrc = GetPartitionInfo(BCL1_offset, 0, 0)
+                    if bootpart != '':
+                        partitions_count = 1 # значит у нас только 1 партиция - BCL1
+                else:
+                    exit(0) # ничего не найдено
+            else:
+                exit(0) # ничего не найдено
 
 
 
@@ -2273,7 +2355,7 @@ def main():
         NVTPACK_FW_HDR2_size = struct.unpack('<I', fin.read(4))[0]
         partitions_count = struct.unpack('<I', fin.read(4))[0]
         total_file_size = struct.unpack('<I', fin.read(4))[0]
-        orig_file_size = total_file_size                                
+        orig_file_size = total_file_size
         checksum_method = struct.unpack('<I', fin.read(4))[0]
         checksum_value = struct.unpack('<I', fin.read(4))[0]
         print('Found \033[93m%i\033[0m partitions' % partitions_count)
@@ -2424,12 +2506,15 @@ def main():
                     part_type[a] += ', \033[94mCRC fixed\033[0m'
                 # fix CRC for BCL1
                 if part_type[a][:13] == '\033[93mBCL1\033[0m':
-                    fin = open(in_file, 'r+b')
-                    fin.seek(part_startoffset[a] + 0x4, 0)
-                    fin.write(struct.pack('<H', part_crcCalc[a]))
-                    fin.close()
-                    part_type[a] += ', \033[94mCRC fixed\033[0m'
-        # fix firmware file CRC
+                    # no need to fix for bootloader BCL1 partition (here is 00 00 CRC as I seen)
+                    if FW_BOOTLOADER == 0:
+                        fin = open(in_file, 'r+b')
+                        fin.seek(part_startoffset[a] + 0x4, 0)
+                        fin.write(struct.pack('<H', part_crcCalc[a]))
+                        fin.close()
+                        part_type[a] += ', \033[94mCRC fixed\033[0m'
+
+        # fix whole firmware file CRC
         if fixCRC_partID != -1:
             if FW_HDR2 == 1:
                 CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, total_file_size, 0x24)
