@@ -717,10 +717,11 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
     # read LZMA Dictionary size - 4 байта в заголовке LZMA
     if (Algorithm == 0x0B):
-        fin.seek(part_startoffset[part_nr] + in_offset + 0x11, 0)
-        LZMA_DictSize = struct.unpack('<I', fin.read(4))[0]
-        LZMA_UncompSize1 = struct.unpack('<I', fin.read(4))[0]
-        LZMA_UncompSize2 = struct.unpack('<I', fin.read(4))[0]
+        fin.seek(part_startoffset[part_nr] + in_offset + 0x10, 0)
+        LZMA_Properties = struct.unpack('B', fin.read(1))[0] # lc, lp and pb values
+        LZMA_DictionarySize = struct.unpack('<I', fin.read(4))[0]
+        LZMA_UncompressedSize64_Low = struct.unpack('<I', fin.read(4))[0]
+        LZMA_UncompressedSize64_High = struct.unpack('<I', fin.read(4))[0]
         
     out = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
 
@@ -978,13 +979,23 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
     # LZMA compress
     if Algorithm == 0x0B:
-        #print("LZMA_DictSize=0x%08X" % LZMA_DictSize)
-
         # lzma.exe e -a1 -d20 -mfbt4 -fb40 -mc36 -lc3 -lp0 -pb2 infile outfile
-        fast_bytes = 40
+        fast_bytes = 40#40
         search_depth = 16 + fast_bytes//2 # depth search формула для любого из MF_BT*
-        my_filters = [{"id":lzma.FILTER_LZMA1, "mode":lzma.MODE_NORMAL, "dict_size":LZMA_DictSize, "mf":lzma.MF_BT4, "nice_len":fast_bytes, "depth":search_depth, "lc":3, "lp":0, "pb":2}]
-        
+
+        lc = LZMA_Properties % 9
+        LZMA_Properties = LZMA_Properties // 9
+        pb = LZMA_Properties // 5
+        lp = LZMA_Properties % 5
+        #print('lc=%i lp=%i pb=%i' % (lc, lp, pb)) # usually 3, 0, 2
+
+        #print("LZMA_DictionarySize=0x%08X" % LZMA_DictionarySize)
+        if LZMA_DictionarySize < (1 << 12):
+            LZMA_DictionarySize = (1 << 12)
+            #print("Fixed LZMA_DictionarySize=0x%08X" % LZMA_DictionarySize)
+    
+        my_filters = [{"id":lzma.FILTER_LZMA1, "mode":lzma.MODE_NORMAL, "dict_size":LZMA_DictionarySize, "mf":lzma.MF_BT4, "nice_len":fast_bytes, "depth":search_depth, "lc":lc, "lp":lp, "pb":pb}]
+
         compressed_data = lzma.compress(dataread, format = lzma.FORMAT_ALONE, filters = my_filters) # но пока что filters не работает с pypy3 и это все равно не дает байт в байт сжатие как lzma.exe
         ##compressed_data = lzma.compress(dataread, format = lzma.FORMAT_ALONE)
         # compressed_data is ready to save now
@@ -1032,9 +1043,9 @@ def BCL1_compress(part_nr, in_offset, in2_file):
     #if Algorithm == 0x0B:
     #    fout = open(out, 'r+b')
     #    fout.seek(0x15, 0)
-    #    if (LZMA_UncompSize1 == LZMA_UncompSize2):
+    #    if (LZMA_UncompressedSize64_Low == LZMA_UncompressedSize64_High):
     #        # если в оригинальном файле есть дублирование
-    #        if LZMA_UncompSize1 == 0xFFFFFFFF:
+    #        if LZMA_UncompressedSize64_Low == 0xFFFFFFFF:
     #            fout.write(struct.pack('<II', 0xFFFFFFFF, 0xFFFFFFFF))
     #        else:
     #            fout.write(struct.pack('<II', len(dataread)&0xFFFFFFFF, len(dataread)&0xFFFFFFFF))
