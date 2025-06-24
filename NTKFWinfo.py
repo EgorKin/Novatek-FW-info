@@ -980,7 +980,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
     # LZMA compress
     if Algorithm == 0x0B:
         # lzma.exe e -a1 -d20 -mfbt4 -fb40 -mc36 -lc3 -lp0 -pb2 infile outfile
-        fast_bytes = 40#40
+        fast_bytes = 40
         search_depth = 16 + fast_bytes//2 # depth search формула для любого из MF_BT*
 
         lc = LZMA_Properties % 9
@@ -1574,8 +1574,6 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         temp = struct.unpack('B', fin.read(1))[0]
         if temp in uImage_os:
             temp_parttype += ', OS: ' + '\"\033[93m' + uImage_os[temp] + '\033[0m\"'
-        else:
-            temp_parttype += ''
 
         # CPU architecture
         #fin.seek(part_offset[2] + 29, 0)
@@ -1586,8 +1584,6 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
             # check for ARM64 architecture to use favor_lzo compr algo in UBI partitions
             if (temp == 22): # and uImage_arch[temp] == 'ARM64'
                 found_ARM64 = 1
-        else:
-            temp_parttype += ''
 
         # Image Type
         #fin.seek(part_offset[2] + 30, 0)
@@ -1611,16 +1607,12 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
                     MultiFileImage_content += 'Image ' + str(MultiFileImage_amount) + ': ' + '{:,}'.format(temp) + ' bytes' + os.linesep
 
                 fin.seek(currpos, 0) # back to previous read pos
-        else:
-            temp_parttype += ''
 
         # Compression Type
         #fin.seek(part_offset[2] + 31, 0)
         temp = struct.unpack('B', fin.read(1))[0]
         if temp in uImage_compressiontype:
             temp_parttype += ', Compression type: ' + '\"\033[93m' + uImage_compressiontype[temp] + '\033[0m\"'
-        else:
-            temp_parttype += ''
 
         # Image Name
         #fin.seek(part_offset[2] + 32, 0)
@@ -1661,34 +1653,10 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         return temp_parttype, CRC
 
 
-    # MODELEXT info header and data
-    if partfirst4bytes == 0x38000000:
-        fin.seek(0xC, 1)
-        if(str(struct.unpack('8s', fin.read(8))[0])[2:-1] == 'MODELEXT'):
-            temp_parttype = 'MODELEXT INFO'
-
-            temp_parttype += ', Chip:\033[93m' + str(struct.unpack('8s', fin.read(8))[0]).replace("\\x00","")[2:-1] + '\033[0m'
-            fin.read(8)
-            temp_parttype += ', Build:\033[93m' + str(struct.unpack('8s', fin.read(8))[0]).replace("\\x00","")[2:-1] + '\033[0m'
-            uilength = struct.unpack('<I', fin.read(4))[0]
-            fin.seek(2, 1)
-            uiChkValue = struct.unpack('<H', fin.read(2))[0]
-            
-            CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, uilength, 0x36)
-            
-            if addinfo:
-                part_type.append(temp_parttype)
-                part_crc.append(uiChkValue)
-                part_crcCalc.append(CRC)
-                fin.close()
-            return temp_parttype, CRC
-
-
     # BCL1
     if partfirst4bytes == 0x42434C31:
         temp_parttype = '\033[93mBCL1\033[0m'
 
-        fin.seek(start_offset + 4, 0)
         uiChkValue = struct.unpack('<H', fin.read(2))[0] # CRC
 
         # compression algo
@@ -1696,7 +1664,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         if compressAlgo in compressAlgoTypes:
             temp_parttype += '[\033[93m' + compressAlgoTypes[compressAlgo] + '\033[0m]'
         else:
-            temp_parttype += '[\033[91mcomp.algo:0x%0X\033[0m' % compressAlgo + ']'
+            temp_parttype += '[\033[91mcompr.algo:0x%0X\033[0m' % compressAlgo + ']'
 
         BCL1unpackedSize = struct.unpack('>I', fin.read(4))[0]
         BCL1packedSize = struct.unpack('>I', fin.read(4))[0]
@@ -1777,6 +1745,113 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
                 part_crcCalc.append(CRC)
                 fin.close()
             return temp_parttype, CRC
+
+
+    # check is this a MODELEXT header and MODELEXT info
+
+    # class MODELEXT_HEADER(Structure): _fields_ = [
+    #    ("size", c_uint),
+    #    ("type", c_uint), // MODELEXT_TYPE_INFO = 1
+    #    ("number", c_uint),
+    #    ("version", c_uint), ]
+    MODELEXT_SIZE = partfirst4bytes # size in bytes for (header + data like info or something)
+    MODELEXT_TYPE = struct.unpack('<I', fin.read(4))[0]
+    MODELEXT_NUMBER = struct.unpack('<I', fin.read(4))[0] # 01 00 00 00
+    MODELEXT_VERSION = struct.unpack('<I', fin.read(4))[0] # MODELEXT_INFO_VER = 0x16072219   EMB_PARTITION_INFO_VER = 0x16072117
+
+    # MODELEXT_TYPE_INFO case
+    if (MODELEXT_TYPE == 1) and (MODELEXT_VERSION == 0x16072219) and (str(struct.unpack('8s', fin.read(8))[0])[2:-1] == 'MODELEXT'):
+        # class MODELEXT_INFO(Structure): _fields_ = [
+        #   ("name", c_char*8),
+        #   ("chip_name", c_char*8),
+        #   ("version", c_char*8),
+        #   ("date", c_char*8),
+        #   ("ext_bin_length", c_uint),
+        #   ("check_sum", c_uint), ]
+        temp_parttype = 'MODELEXT INFO'
+
+        temp_parttype += ', Chip:\033[93m' + str(struct.unpack('8s', fin.read(8))[0]).replace("\\x00","")[2:-1] + '\033[0m'
+        fin.read(8) # version 00000001
+        temp_parttype += ', Build:\033[93m' + str(struct.unpack('8s', fin.read(8))[0]).replace("\\x00","")[2:-1] + '\033[0m'
+        ext_bin_length = struct.unpack('<I', fin.read(4))[0] #ext_bin_length
+        fin.seek(2, 1) # 55 AA bytes
+        uiChkValue = struct.unpack('<H', fin.read(2))[0] # CRC
+
+        CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, ext_bin_length, 0x36)
+
+        if addinfo:
+            part_type.append(temp_parttype)
+            part_crc.append(uiChkValue)
+            part_crcCalc.append(CRC)
+            fin.close()
+        return temp_parttype, CRC
+    else:
+        # MODELEXT_TYPE_DUMMY = 0
+        # MODELEXT_TYPE_INFO = 1
+        # MODELEXT_TYPE_BIN_INFO = 2
+        # MODELEXT_TYPE_PINMUX_CFG = 3
+        # MODELEXT_TYPE_INTDIR_CFG = 4
+        # MODELEXT_TYPE_EMB_PARTITION = 5
+        # MODELEXT_TYPE_GPIO_INFO = 6
+        # MODELEXT_TYPE_DRAM_PARTITION = 7
+        # MODELEXT_TYPE_MODEL_CFG = 8
+        # MODELEXT_TYPE_MAX = 9
+        temp_parttype = ''
+
+        if (MODELEXT_TYPE == 0):
+            temp_parttype = 'MODELEXT DUMMY'
+        if (MODELEXT_TYPE == 2):
+            temp_parttype = 'MODELEXT BININFO'
+        if (MODELEXT_TYPE == 3):
+            temp_parttype = 'MODELEXT PINMUX_CFG'
+        if (MODELEXT_TYPE == 4):
+            temp_parttype = 'MODELEXT INTDIR_CFG'
+        if (MODELEXT_TYPE == 5) and (MODELEXT_VERSION == 0x16072117):
+            '''EMB_PARTITION_INFO_VER = 0x16072117
+            EMB_PARTITION_INFO_COUNT = 16
+            EMBTYPE_UNKNOWN = 0x00
+            EMBTYPE_LOADER  = 0x01
+            EMBTYPE_MODELEXT = 0x02
+            EMBTYPE_UITRON = 0x03
+            EMBTYPE_ECOS = 0x04
+            EMBTYPE_UBOOT = 0x05
+            EMBTYPE_LINUX = 0x06
+            EMBTYPE_DSP = 0x07
+            EMBTYPE_PSTORE = 0x08
+            EMBTYPE_FAT = 0x09
+            EMBTYPE_EXFAT = 0x0A
+            EMBTYPE_ROOTFS = 0x0B
+            EMBTYPE_RAMFS = 0x0C
+            EMBTYPE_UENV = 0x0D
+            EMBTYPE_MBR = 0x0E
+
+            class EMB_PARTITION(Structure):
+            _fields_ = [
+                ("EmbType", c_ushort),
+                ("OrderIdx", c_ushort),
+                ("PartitionOffset", c_uint),
+                ("PartitionSize", c_uint),
+                ("ReversedSize", c_uint), ] '''
+            temp_parttype = 'MODELEXT EMB_PARTITION'
+            # TODO Add parsing code for this partition
+
+        if (MODELEXT_TYPE == 6):
+            temp_parttype = 'MODELEXT GPIO_INFO'
+        if (MODELEXT_TYPE == 7):
+            temp_parttype = 'MODELEXT DRAM_PARTITION'
+        if (MODELEXT_TYPE == 8):
+            temp_parttype = 'MODELEXT MODEL_CFG'
+
+        if temp_parttype != '':
+            if addinfo:
+                part_type.append(temp_parttype)
+                part_crc.append(0)
+                part_crcCalc.append(0)
+                fin.close()
+            return temp_parttype, 0
+        else:
+            # did not found any MODELEXT related byted, seek() back to partfirst4bytes after additional read() to valid read() and check in other cases
+            fin.seek(start_offset + 4, 0)
 
 
     # unknown part
