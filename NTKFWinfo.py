@@ -50,8 +50,9 @@
 # V6.4 - Do not change BCL1 unpacked partition size values in BCL1 header if a new partition unpacked size is less than before to be more closer to original bytes. Refactor BCL1_compress() function.
 # V6.5 - Initial support bootloader update files (LDxxxxA.bin) - NOT TESTED! DO NOT USE IT FOR REFLASH YOUR DEVICES! WRONG BOOTLOADER MAY BRICK YOUR HARDWARE!
 # V6.6 - MODELEXT partition comes with internal structure support now. Uncompress is ready to use and split partition to separate files depend on types.
+# V6.7 - MODELEXT partitions now can be compressed back with CRC fixes.
 
-CURRENT_VERSION = '6.6'
+CURRENT_VERSION = '6.7'
 
 import os, struct, sys, argparse, array
 from datetime import datetime, timezone
@@ -643,6 +644,100 @@ def compress_FDT(part_nr, in2_file):
 
 
 
+def compress_MODELEXT(part_nr, in2_file):
+    global in_file
+
+    fin = open(in_file, 'rb')
+    fin.seek(part_startoffset[part_nr], 0)
+
+    MODELEXT_SIZE = struct.unpack('<I', fin.read(4))[0]
+    MODELEXT_TYPE = struct.unpack('<I', fin.read(4))[0]
+    MODELEXT_NUMBER = struct.unpack('<I', fin.read(4))[0]
+    MODELEXT_VERSION = struct.unpack('<I', fin.read(4))[0]
+    if (MODELEXT_TYPE == 1) and (MODELEXT_VERSION == 0x16072219) and (str(struct.unpack('8s', fin.read(8))[0])[2:-1] == 'MODELEXT'):
+        fin.seek(MODELEXT_SIZE - 24, 1)
+        type_str = ''
+        compressed_data = bytearray()
+
+        while(1):
+            if MODELEXT_TYPE == 1:
+                type_str = '_INFO'
+            if MODELEXT_TYPE == 2:
+                type_str = '_BIN_INFO'
+            if MODELEXT_TYPE == 3:
+                type_str = '_PINMUX_CFG'
+            if MODELEXT_TYPE == 4:
+                type_str = '_INTDIR_CFG'
+            if MODELEXT_TYPE == 5:
+                type_str = '_EMB_PARTITION'
+            if MODELEXT_TYPE == 6:
+                type_str = '_GPIO_INFO'
+            if MODELEXT_TYPE == 7:
+                type_str = '_DRAM_PARTITION'
+            if MODELEXT_TYPE == 8:
+                type_str = '_MODEL_CFG'
+            if type_str == '':
+                break
+            
+            # для MODELEXT на вход должен подаваться файлы
+            if not os.path.isfile(in2_file + type_str):
+                print('\033[91m%s sub-partition file does not found, exit\033[0m' % (in2_file + type_str))
+                exit(0)
+
+            fadd = open(in2_file + type_str, 'rb')
+            part_data = fadd.read()
+            fadd.close()
+
+            print('Compressing \033[93m%s sub-partition file...\033[0m' % (in2_file + type_str))
+            compressed_data += struct.pack('<I', MODELEXT_SIZE)
+            compressed_data += struct.pack('<I', MODELEXT_TYPE)
+            compressed_data += struct.pack('<I', MODELEXT_NUMBER)
+            compressed_data += struct.pack('<I', MODELEXT_VERSION)
+            compressed_data += part_data
+
+            # continue with next sub-part
+            MODELEXT_SIZE = struct.unpack('<I', fin.read(4))[0]
+            MODELEXT_TYPE = struct.unpack('<I', fin.read(4))[0]
+            MODELEXT_NUMBER = struct.unpack('<I', fin.read(4))[0]
+            MODELEXT_VERSION = struct.unpack('<I', fin.read(4))[0]
+            type_str = ''
+            fin.seek(MODELEXT_SIZE - 16, 1)
+
+        # compressed_data is combined now
+
+        # calc padding bytes for whole MODELEXT partition
+        addsize = (len(compressed_data) % 4)
+        if addsize != 0:
+            addsize = 4 - addsize
+            compressed_data += b'\x00' * addsize
+
+        # save compressed_data to file
+        comp_filename = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
+        fout = open(comp_filename, 'w+b')
+        fout.write(compressed_data[:0x30] + struct.pack('<I', len(compressed_data)) + compressed_data[0x34:]) # fix total file size value in MODELEXT INFO sub-partition
+        fout.close()
+
+        # проверим прошла ли упаковка успешно
+        if not os.path.isfile(comp_filename):
+            print('\033[91m%s compressed partition file does not found, exit\033[0m' % comp_filename)
+            exit(0)
+
+        # hide output print
+        global is_silent
+        is_silent = 1
+
+        # replace partition
+        partition_replace(part_id[part_nr], 0, comp_filename)
+
+        # delete comp_partitionID file
+        subprocess.run('rm -rf ' + '\"' + comp_filename + '\"', shell=True)
+
+        # fix CRC
+        is_silent = 0
+        fixCRC(part_id[part_nr])
+
+
+
 def compress(part_nr, in2_file):
     global in_file
 
@@ -683,6 +778,15 @@ def compress(part_nr, in2_file):
         if struct.unpack('>I', FourCC)[0] == 0xD00DFEED:
             fin.close()
             compress_FDT(part_nr, in2_file)
+            return
+
+        # MODELEXT
+        MODELEXT_TYPE = struct.unpack('<I', fin.read(4))[0]
+        fin.read(4)
+        MODELEXT_VERSION = struct.unpack('<I', fin.read(4))[0]
+        if (MODELEXT_TYPE == 1) and (MODELEXT_VERSION == 0x16072219) and (str(struct.unpack('8s', fin.read(8))[0])[2:-1] == 'MODELEXT'):
+            fin.close()
+            compress_MODELEXT(part_nr, in2_file)
             return
 
     print("\033[91mThis partition type is not supported for compression\033[0m")
@@ -1205,9 +1309,9 @@ def uncompress(in_offset, out_filename, size):
             if type_str == '':
                 return
 
-            print('Save \033[93m%s\033[0m subpartition' %(type_str[1:]))
+            print('Save \033[93m%s\033[0m sub-partition' %(type_str[1:]))
             fpartout = open(out_filename + type_str, 'w+b')
-            fpartout.write(struct.pack('<I', MODELEXT_SIZE) + struct.pack('<I', MODELEXT_TYPE) + struct.pack('<I', MODELEXT_NUMBER) + struct.pack('<I', MODELEXT_VERSION) + data)
+            fpartout.write(data)
             fpartout.close()
 
             MODELEXT_SIZE = struct.unpack('<I', fin.read(4))[0]
@@ -2215,7 +2319,7 @@ def fixCRC(partID):
                         print('Partition ID ' + str(part_id[a]) + ' - \033[94mCRC fixed\033[0m')
                     break
                 # fix CRC for MODELEXT
-                if part_type[a][:13] == 'MODELEXT INFO':
+                if part_type[a][:17] == '\033[93mMODELEXT\033[0m':
                     fin = open(in_file, 'r+b')
                     fin.seek(part_startoffset[a] + 0x36, 0)
                     fin.write(struct.pack('<H', calcCRC))
@@ -2621,7 +2725,7 @@ def main():
                     fin.close()
                     part_type[a] += ', \033[94mCRC fixed\033[0m'
                 # fix CRC for MODELEXT
-                if part_type[a][:13] == 'MODELEXT INFO':
+                if part_type[a][:17] == '\033[93mMODELEXT\033[0m':
                     fin = open(in_file, 'r+b')
                     fin.seek(part_startoffset[a] + 0x36, 0)
                     fin.write(struct.pack('<H', part_crcCalc[a]))
