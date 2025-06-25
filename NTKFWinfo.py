@@ -49,8 +49,9 @@
 # V6.3 - output filename is optional now for -udtb/-cdtb commands (replace extension to .dts/.dtb in input filename if output filename is not defined)
 # V6.4 - Do not change BCL1 unpacked partition size values in BCL1 header if a new partition unpacked size is less than before to be more closer to original bytes. Refactor BCL1_compress() function.
 # V6.5 - Initial support bootloader update files (LDxxxxA.bin) - NOT TESTED! DO NOT USE IT FOR REFLASH YOUR DEVICES! WRONG BOOTLOADER MAY BRICK YOUR HARDWARE!
+# V6.6 - MODELEXT partition comes with internal structure support now. Uncompress is ready to use and split partition to separate files depend on types.
 
-CURRENT_VERSION = '6.5'
+CURRENT_VERSION = '6.6'
 
 import os, struct, sys, argparse, array
 from datetime import datetime, timezone
@@ -1102,7 +1103,6 @@ def uncompress(in_offset, out_filename, size):
     global in_file
 
     fin = open(in_file, 'rb')
-    # check BCL1 marker at start of partition    
     fin.seek(in_offset, 0)
     FourCC = fin.read(4)
 
@@ -1174,8 +1174,51 @@ def uncompress(in_offset, out_filename, size):
         # удалим tempfile, tempfile.ext4 нам еще нужен будет для сборки обратно
         os.system('rm -rf ' + '\"' + out_filename + '/tempfile' + '\"')
         return
+    
+    # MODELEXT
+    MODELEXT_SIZE = struct.unpack('<I', FourCC)[0]
+    MODELEXT_TYPE = struct.unpack('<I', fin.read(4))[0]
+    MODELEXT_NUMBER = struct.unpack('<I', fin.read(4))[0]
+    MODELEXT_VERSION = struct.unpack('<I', fin.read(4))[0]
+    if (MODELEXT_TYPE == 1) and (MODELEXT_VERSION == 0x16072219) and (str(struct.unpack('8s', fin.read(8))[0])[2:-1] == 'MODELEXT'):
+        fin.seek(-8, 1) # seek back to 'MODELEXT' text start
+        data = fin.read(MODELEXT_SIZE - 16) # -16 bytes of header
+        type_str = ''
 
-    print("\033[91mOnly FDT(DTB), BCL1, UBI and SPARSE partitions supported now, exit\033[0m")
+        while(1):
+            if MODELEXT_TYPE == 1:
+                type_str = '_INFO'
+            if MODELEXT_TYPE == 2:
+                type_str = '_BIN_INFO'
+            if MODELEXT_TYPE == 3:
+                type_str = '_PINMUX_CFG'
+            if MODELEXT_TYPE == 4:
+                type_str = '_INTDIR_CFG'
+            if MODELEXT_TYPE == 5:
+                type_str = '_EMB_PARTITION'
+            if MODELEXT_TYPE == 6:
+                type_str = '_GPIO_INFO'
+            if MODELEXT_TYPE == 7:
+                type_str = '_DRAM_PARTITION'
+            if MODELEXT_TYPE == 8:
+                type_str = '_MODEL_CFG'
+            if type_str == '':
+                return
+
+            print('Save \033[93m%s\033[0m subpartition' %(type_str[1:]))
+            fpartout = open(out_filename + type_str, 'w+b')
+            fpartout.write(struct.pack('<I', MODELEXT_SIZE) + struct.pack('<I', MODELEXT_TYPE) + struct.pack('<I', MODELEXT_NUMBER) + struct.pack('<I', MODELEXT_VERSION) + data)
+            fpartout.close()
+
+            MODELEXT_SIZE = struct.unpack('<I', fin.read(4))[0]
+            MODELEXT_TYPE = struct.unpack('<I', fin.read(4))[0]
+            MODELEXT_NUMBER = struct.unpack('<I', fin.read(4))[0]
+            MODELEXT_VERSION = struct.unpack('<I', fin.read(4))[0]
+            type_str = ''
+            data = fin.read(MODELEXT_SIZE - 16) # -16 bytes of header
+        return
+
+    print("\033[91mOnly FDT(DTB), BCL1, UBI, SPARSE and MODELEXT partitions is supported now, exit\033[0m")
     fin.close()
 
 
@@ -1754,11 +1797,12 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
     #    ("type", c_uint), // MODELEXT_TYPE_INFO = 1
     #    ("number", c_uint),
     #    ("version", c_uint), ]
-    MODELEXT_SIZE = partfirst4bytes # size in bytes for (header + data like info or something)
+    MODELEXT_SIZE = partfirst4bytes # size in bytes for (header + data like info and others)
     MODELEXT_TYPE = struct.unpack('<I', fin.read(4))[0]
     MODELEXT_NUMBER = struct.unpack('<I', fin.read(4))[0] # 01 00 00 00
     MODELEXT_VERSION = struct.unpack('<I', fin.read(4))[0] # MODELEXT_INFO_VER = 0x16072219   EMB_PARTITION_INFO_VER = 0x16072117
 
+    # начиная с INFO идут партиции одна за другой по инкременту TYPE, после последней MODELEXT_TYPE_MODEL_CFG идут padding bytes выравнивая по 4 байта
     # MODELEXT_TYPE_INFO case
     if (MODELEXT_TYPE == 1) and (MODELEXT_VERSION == 0x16072219) and (str(struct.unpack('8s', fin.read(8))[0])[2:-1] == 'MODELEXT'):
         # class MODELEXT_INFO(Structure): _fields_ = [
@@ -1768,12 +1812,12 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         #   ("date", c_char*8),
         #   ("ext_bin_length", c_uint),
         #   ("check_sum", c_uint), ]
-        temp_parttype = 'MODELEXT INFO'
+        temp_parttype = '\033[93mMODELEXT\033[0m'
 
-        temp_parttype += ', Chip:\033[93m' + str(struct.unpack('8s', fin.read(8))[0]).replace("\\x00","")[2:-1] + '\033[0m'
+        temp_parttype += ' INFO: Chip:\033[93m' + str(struct.unpack('8s', fin.read(8))[0]).replace("\\x00","")[2:-1] + '\033[0m'
         fin.read(8) # version 00000001
         temp_parttype += ', Build:\033[93m' + str(struct.unpack('8s', fin.read(8))[0]).replace("\\x00","")[2:-1] + '\033[0m'
-        ext_bin_length = struct.unpack('<I', fin.read(4))[0] #ext_bin_length
+        ext_bin_length = struct.unpack('<I', fin.read(4))[0] # ext_bin_length - full partition size (header + info + other types)
         fin.seek(2, 1) # 55 AA bytes
         uiChkValue = struct.unpack('<H', fin.read(2))[0] # CRC
 
