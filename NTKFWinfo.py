@@ -680,15 +680,16 @@ def compress_MODELEXT(part_nr, in2_file):
                 break
             
             # для MODELEXT на вход должен подаваться файлы
-            if not os.path.isfile(in2_file + type_str):
-                print('\033[91m%s sub-partition file does not found, exit\033[0m' % (in2_file + type_str))
+            inputname = in2_file + '_' + str(MODELEXT_TYPE) + type_str
+            if not os.path.isfile(inputname):
+                print('\033[91m%s sub-partition file does not found, exit\033[0m' % (inputname))
                 exit(0)
 
-            fadd = open(in2_file + type_str, 'rb')
+            fadd = open(inputname, 'rb')
             part_data = fadd.read()
             fadd.close()
 
-            print('Compressing \033[93m%s sub-partition file...\033[0m' % (in2_file + type_str))
+            print('Compressing \033[93m%s sub-partition file...\033[0m' % (inputname))
             compressed_data += struct.pack('<I', MODELEXT_SIZE)
             compressed_data += struct.pack('<I', MODELEXT_TYPE)
             compressed_data += struct.pack('<I', MODELEXT_NUMBER)
@@ -1310,7 +1311,7 @@ def uncompress(in_offset, out_filename, size):
                 return
 
             print('Save \033[93m%s\033[0m sub-partition' %(type_str[1:]))
-            fpartout = open(out_filename + type_str, 'w+b')
+            fpartout = open(out_filename + '_' + str(MODELEXT_TYPE) + type_str, 'w+b')
             fpartout.write(data)
             fpartout.close()
 
@@ -1589,7 +1590,7 @@ def fillIDPartNames(startat):
     fin.close()
     
     
-
+'''
 def SearchPartNamesInDTB(partitions_count):
     global in_file
     alreadyfound = 0
@@ -1607,7 +1608,7 @@ def SearchPartNamesInDTB(partitions_count):
                 if alreadyfound == 0:
                     fillIDPartNames(part_startoffset[a] + startat)
                     alreadyfound = 1 # чтобы снова не добавлять инфу из следующих партиций навроде fdt.restore
-
+'''
 
 
 
@@ -1932,74 +1933,11 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
             part_crc.append(uiChkValue)
             part_crcCalc.append(CRC)
             fin.close()
+
         return temp_parttype, CRC
     else:
-        # MODELEXT_TYPE_DUMMY = 0
-        # MODELEXT_TYPE_INFO = 1
-        # MODELEXT_TYPE_BIN_INFO = 2
-        # MODELEXT_TYPE_PINMUX_CFG = 3
-        # MODELEXT_TYPE_INTDIR_CFG = 4
-        # MODELEXT_TYPE_EMB_PARTITION = 5
-        # MODELEXT_TYPE_GPIO_INFO = 6
-        # MODELEXT_TYPE_DRAM_PARTITION = 7
-        # MODELEXT_TYPE_MODEL_CFG = 8
-        # MODELEXT_TYPE_MAX = 9
-        temp_parttype = ''
-
-        if (MODELEXT_TYPE == 0):
-            temp_parttype = 'MODELEXT DUMMY'
-        if (MODELEXT_TYPE == 2):
-            temp_parttype = 'MODELEXT BININFO'
-        if (MODELEXT_TYPE == 3):
-            temp_parttype = 'MODELEXT PINMUX_CFG'
-        if (MODELEXT_TYPE == 4):
-            temp_parttype = 'MODELEXT INTDIR_CFG'
-        if (MODELEXT_TYPE == 5) and (MODELEXT_VERSION == 0x16072117):
-            '''EMB_PARTITION_INFO_VER = 0x16072117
-            EMB_PARTITION_INFO_COUNT = 16
-            EMBTYPE_UNKNOWN = 0x00
-            EMBTYPE_LOADER  = 0x01
-            EMBTYPE_MODELEXT = 0x02
-            EMBTYPE_UITRON = 0x03
-            EMBTYPE_ECOS = 0x04
-            EMBTYPE_UBOOT = 0x05
-            EMBTYPE_LINUX = 0x06
-            EMBTYPE_DSP = 0x07
-            EMBTYPE_PSTORE = 0x08
-            EMBTYPE_FAT = 0x09
-            EMBTYPE_EXFAT = 0x0A
-            EMBTYPE_ROOTFS = 0x0B
-            EMBTYPE_RAMFS = 0x0C
-            EMBTYPE_UENV = 0x0D
-            EMBTYPE_MBR = 0x0E
-
-            class EMB_PARTITION(Structure):
-            _fields_ = [
-                ("EmbType", c_ushort),
-                ("OrderIdx", c_ushort),
-                ("PartitionOffset", c_uint),
-                ("PartitionSize", c_uint),
-                ("ReversedSize", c_uint), ] '''
-            temp_parttype = 'MODELEXT EMB_PARTITION'
-            # TODO Add parsing code for this partition
-
-        if (MODELEXT_TYPE == 6):
-            temp_parttype = 'MODELEXT GPIO_INFO'
-        if (MODELEXT_TYPE == 7):
-            temp_parttype = 'MODELEXT DRAM_PARTITION'
-        if (MODELEXT_TYPE == 8):
-            temp_parttype = 'MODELEXT MODEL_CFG'
-
-        if temp_parttype != '':
-            if addinfo:
-                part_type.append(temp_parttype)
-                part_crc.append(0)
-                part_crcCalc.append(0)
-                fin.close()
-            return temp_parttype, 0
-        else:
-            # did not found any MODELEXT related byted, seek() back to partfirst4bytes after additional read() to valid read() and check in other cases
-            fin.seek(start_offset + 4, 0)
+        # did not found MODELEXT, seek() back to partfirst4bytes after additional read() to valid read() and check in other cases
+        fin.seek(start_offset + 4, 0)
 
 
     # unknown part
@@ -2748,29 +2686,39 @@ def main():
                         fin.close()
                         part_type[a] += ', \033[94mCRC fixed\033[0m'
 
-        # fix whole firmware file CRC
-        if fixCRC_partID != -1:
-            if FW_HDR2 == 1:
-                CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, total_file_size, 0x24)
+        # fix CRC for whole file
+        if FW_HDR2 == 1:
+            CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, total_file_size, 0x24)
+            if checksum_value == CRC_FW:
+                print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+            else:
+                fin = open(in_file, 'r+b')
+                fin.seek(0x24, 0) # for NVTPACK_FW_HDR2
+                fin.write(struct.pack('<I', CRC_FW))
+                fin.close()
+                print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
+        else:
+            if FW_HDR == 1:
+                CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
                 if checksum_value == CRC_FW:
-                    print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+                    print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
                 else:
                     fin = open(in_file, 'r+b')
-                    fin.seek(0x24, 0) # for NVTPACK_FW_HDR2
+                    fin.seek(part_size[0] + 0x14, 0) # for NVTPACK_FW_HDR
                     fin.write(struct.pack('<I', CRC_FW))
                     fin.close()
-                    print('Firmware file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
+                    print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
             else:
-                if FW_HDR == 1:
-                    CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
+                if FW_BOOTLOADER == 1:
+                    CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, total_file_size, 0x32)
                     if checksum_value == CRC_FW:
-                        print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+                        print('Bootloader file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
                     else:
                         fin = open(in_file, 'r+b')
-                        fin.seek(part_size[0] + 0x14, 0) # for NVTPACK_FW_HDR
-                        fin.write(struct.pack('<I', CRC_FW))
+                        fin.seek(0x32, 0) # for bootloader only
+                        fin.write(struct.pack('<H', CRC_FW))
                         fin.close()
-                        print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
+                        print('Bootloader file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
     # exit не делаем чтобы показать информацию по партициям и где CRC были исправлены
 
 
