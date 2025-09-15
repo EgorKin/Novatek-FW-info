@@ -679,7 +679,7 @@ def compress_MODELEXT(part_nr, in2_file):
             if type_str == '':
                 break
             
-            # для MODELEXT на вход должен подаваться файлы
+            # для MODELEXT на вход должны подаваться файлы
             inputname = in2_file + '_' + str(MODELEXT_TYPE) + type_str
             if not os.path.isfile(inputname):
                 print('\033[91m%s sub-partition file does not found, exit\033[0m' % (inputname))
@@ -1128,9 +1128,9 @@ def BCL1_compress(part_nr, in_offset, in2_file):
         fout.write(struct.pack('>I', len(dataread))) # write BCL1 unpacked partition size
 
     # надо дописать к сжатым данным 00... для выравнивания по 4 байтам
-    # для всех новых прошивок или более старой версии прошивок (BCL1 + NVTPACK_FW_HDR) для самой первой партиции или для просто прошивки из одного BCL1
+    # для всех новых прошивок или более старой версии прошивок (BCL1 + NVTPACK_FW_HDR) для самой первой партиции или для просто прошивки из одного BCL1(но не для bootloader т.к. у них вижу что нет выравнивания размера в заголовке BCL1 для packed_bytes)
     addsize = 0
-    if (FW_HDR2 == 1) | ((FW_HDR == 1) & (part_id[part_nr] == 0)) | (FW_HDR == 0):
+    if (FW_HDR2 == 1) | ((FW_HDR == 1) & (part_id[part_nr] == 0)) | (FW_HDR == 0 and FW_BOOTLOADER == 0):
         addsize = (len(compressed_data) % 4)
         if addsize != 0:
             addsize = 4 - addsize
@@ -2710,6 +2710,7 @@ def main():
                     print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
             else:
                 if FW_BOOTLOADER == 1:
+                    total_file_size = os.path.getsize(in_file)
                     CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, total_file_size, 0x32)
                     if checksum_value == CRC_FW:
                         print('Bootloader file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
