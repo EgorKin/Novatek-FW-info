@@ -51,8 +51,9 @@
 # V6.5 - Initial support bootloader update files (LDxxxxA.bin) - NOT TESTED! DO NOT USE IT FOR REFLASH YOUR DEVICES! WRONG BOOTLOADER MAY BRICK YOUR HARDWARE!
 # V6.6 - MODELEXT partition comes with internal structure support now. Uncompress is ready to use and split partition to separate files depend on types.
 # V6.7 - MODELEXT partitions now can be compressed back with CRC fixes.
+# V6.8 - add new CRC offsets for some uncompressed partitions (like in FW96562A from Viofo A229Pro rear cam FW)
 
-CURRENT_VERSION = '6.7'
+CURRENT_VERSION = '6.8'
 
 import os, struct, sys, argparse, array
 from datetime import datetime, timezone
@@ -878,6 +879,18 @@ def BCL1_compress(part_nr, in_offset, in2_file):
                         print('Uncompressed data partitionID %i at \033[94m0x%04X\033[0m: ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (part_id[part_nr], 0x16E, oldCRC, newCRC))
                 dataread[0x16E] = (newCRC & 0xFF)
                 dataread[0x16F] = ((newCRC >> 8) & 0xFF)
+            else:
+                # для задней камеры на NTK96562A (от Viofo A229 Pro) появилось вот такое ещё условие
+                if (dataread[0x26C] == 0x55) & (dataread[0x26D] == 0xAA):
+                    newCRC = MemCheck_CalcCheckSum16Bit(in2_file, 0, len(dataread), 0x26E)
+                    oldCRC = (dataread[0x26F]<<8)|dataread[0x26E]
+                    if is_silent != 1:
+                        if oldCRC != newCRC:
+                            print('Uncompressed data partitionID %i at \033[94m0x%04X\033[0m: ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (part_id[part_nr], 0x26E, oldCRC, newCRC))
+                        else:
+                            print('Uncompressed data partitionID %i at \033[94m0x%04X\033[0m: ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (part_id[part_nr], 0x26E, oldCRC, newCRC))
+                    dataread[0x26E] = (newCRC & 0xFF)
+                    dataread[0x26F] = ((newCRC >> 8) & 0xFF)
 
     # LZ77 compress
     if Algorithm == 0x09:
@@ -1085,21 +1098,34 @@ def BCL1_compress(part_nr, in_offset, in2_file):
 
     # LZMA compress
     if Algorithm == 0x0B:
-        # lzma.exe e -a1 -d20 -mfbt4 -fb40 -mc36 -lc3 -lp0 -pb2 infile outfile
-        fast_bytes = 40
-        search_depth = 16 + fast_bytes//2 # depth search формула для любого из MF_BT*
+        # For old SDK worked well (byte-by-byte): 7-zip lzma.exe e -a1 -d20 -mfbt4 -fb40 -mc36 -lc3 -lp0 -pb2 infile outfile
+        #
+        # xz --format=lzma --keep -z --lzma1=dict=96k,lc=3,lp=0,pb=2,mf=bt4,nice=26,depth=0 ./LD98530A.bin-uncomp_partitionID0
+        # best: 41,19 (46 076 bytes); 41,20 (46 083 bytes); 26,0 (46 084 bytes); nice=26 is best of all for many depth values
+        #print('start...')
+        #for depth in range(0,1000,1):
+        #print(depth)
+        #depth = 0
+        #for qqq in range(2,274,1):
+        #    print(qqq)
+        #    subprocess.run('xz --format=lzma --keep -z -e --lzma1=dict=96k,lc=3,lp=0,pb=2,mf=bt4,nice=' + str(qqq) + ',depth=' + str(depth) + ' ./LD98530A.bin-uncomp_partitionID0 -c >>./1/out' + str(qqq) + '-' + str(depth) + '.lzma', shell=True)
+        #exit(1)
+
+        fast_bytes = 40 # should be in range (2 - 273)
+        search_depth = 16 + fast_bytes//2 # depth search формула для любого из MF_BT2-4, либо = 0 для автоподбора по lp lc pb
 
         lc = LZMA_Properties % 9
-        LZMA_Properties = LZMA_Properties // 9
-        pb = LZMA_Properties // 5
-        lp = LZMA_Properties % 5
+        LZMA_Properties_t = LZMA_Properties // 9
+        pb = LZMA_Properties_t // 5
+        lp = LZMA_Properties_t % 5
         #print('lc=%i lp=%i pb=%i' % (lc, lp, pb)) # usually 3, 0, 2
 
         #print("LZMA_DictionarySize=0x%08X" % LZMA_DictionarySize)
+        # -d20 for lzma.exe это (1 << 20) и это 1MiB
         if LZMA_DictionarySize < (1 << 12):
             LZMA_DictionarySize = (1 << 12)
             #print("Fixed LZMA_DictionarySize=0x%08X" % LZMA_DictionarySize)
-    
+        
         my_filters = [{"id":lzma.FILTER_LZMA1, "mode":lzma.MODE_NORMAL, "dict_size":LZMA_DictionarySize, "mf":lzma.MF_BT4, "nice_len":fast_bytes, "depth":search_depth, "lc":lc, "lp":lp, "pb":pb}]
 
         compressed_data = lzma.compress(dataread, format = lzma.FORMAT_ALONE, filters = my_filters) # но пока что filters не работает с pypy3 и это все равно не дает байт в байт сжатие как lzma.exe
@@ -1149,15 +1175,20 @@ def BCL1_compress(part_nr, in_offset, in2_file):
     #if Algorithm == 0x0B:
     #    fout = open(out, 'r+b')
     #    fout.seek(0x15, 0)
+    #    new_unpacked_size = len(dataread)
+    #    # если в оригинальном файле есть дублирование значения
     #    if (LZMA_UncompressedSize64_Low == LZMA_UncompressedSize64_High):
-    #        # если в оригинальном файле есть дублирование
     #        if LZMA_UncompressedSize64_Low == 0xFFFFFFFF:
-    #            fout.write(struct.pack('<II', 0xFFFFFFFF, 0xFFFFFFFF))
+    #            fout.write(struct.pack('<II', 0xFFFFFFFF, 0xFFFFFFFF)) # если в оригинале прошивки тут FFFFFFFF FFFFFFFF - запишем так же (UPD: и после этого может начать не распаковываться поэтому закомментил всё пока что)
     #        else:
-    #            fout.write(struct.pack('<II', len(dataread)&0xFFFFFFFF, len(dataread)&0xFFFFFFFF))
+    #            if new_unpacked_size <= 0xFFFFFFFF:
+    #               fout.write(struct.pack('<II', new_unpacked_size&0xFFFFFFFF, new_unpacked_size&0xFFFFFFFF)) # если было 2 одинаковых 32битных значения - так же запишем (пока что size прошивки не превышает 32 бита никогда)
+    #            else:
+    #               print("\033[91mFatal error while writing unpacked_size value more than 32-bit as in original FW\033[0m")
+    #               fout.close()
+    #               exit(1)
     #    else:
-    #        # если по стандарту 64 бита
-    #        fout.write(struct.pack('<II', len(dataread)&0xFFFFFFFF, (len(dataread)>>32)&0xFFFFFFFF))
+    #        fout.write(struct.pack('<II', new_unpacked_size&0xFFFFFFFF, (new_unpacked_size>>32)&0xFFFFFFFF)) # если в оригинале прошивки сделано по стандарту LZMA - 64 бита - то запишем и мы по стандарту
     #    fout.close()
 
     # пересчитываем CRC для BCL1-заголовка только после того как все остальное кроме CRC уже записали
@@ -2470,7 +2501,7 @@ def main():
                 fin.read(2)
                 read3 = struct.unpack('>H', fin.read(2))[0]
                 fin.seek(0x30, 0) # goto 55AA offset
-                read55AA = struct.unpack('>H', fin.read(2))[0]
+                read55AA = struct.unpack('>H', fin.read(2))[0] #если тут 55AA то за ним 2 байта CRC
                 if read1 == read2 and read1 == read3 and constant == 0x000580E0 and read55AA == 0x55AA:
                     # all OK, it is a bootloader
                     print('Input file detects as \033[93mBOOTLOADER\033[0m')
