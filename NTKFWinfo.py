@@ -51,7 +51,7 @@
 # V6.5 - Initial support bootloader update files (LDxxxxA.bin) - NOT TESTED! DO NOT USE IT FOR REFLASH YOUR DEVICES! WRONG BOOTLOADER MAY BRICK YOUR HARDWARE!
 # V6.6 - MODELEXT partition comes with internal structure support now. Uncompress is ready to use and split partition to separate files depend on types.
 # V6.7 - MODELEXT partitions now can be compressed back with CRC fixes.
-# V6.8 - add new CRC offsets for some uncompressed partitions (like in FW96562A from Viofo A229Pro rear cam FW)
+# V6.8 - add new CRC offsets for some uncompressed partitions (like in FW96562A from Viofo A229Pro rear cam FW). Add reading chip_name and release_date info for uboot partitions
 
 CURRENT_VERSION = '6.8'
 
@@ -1692,11 +1692,42 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
     # if partID == 3: # ранее всегда 3 партиция - это uboot
     if len(dtbpart_name) != 0 and dtbpart_name[partID] == 'uboot':
         temp_parttype = 'uboot'
-        CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, part_size, 0x36E)
+        # в uboot партиции пропускаем первые 0x300 байт - пока что так
+        fin.seek(0x300 - 4, 1) # 4 байта считали ранее как partfirst4bytes
+        
+        # попадаем на начало структуры HEADINFO или по другому NVTPACK_BININFO_HDR:
+        # typedef struct _NVTPACK_BININFO_HDR {
+        #    unsigned int CodeEntry;     ///< [0x00] fw CODE entry (4) ----- r by Ld
+        #    unsigned int Resv1[19];     ///< [0x04~0x50] reserved (4*19) -- reserved, its mem value will filled by Ld
+        #    char BinInfo_1[8];          ///< [0x50~0x58] CHIP-NAME (8) ---- r by Ep
+        #    char BinInfo_2[8];          ///< [0x58~0x60] version (8)
+        #    char BinInfo_3[8];          ///< [0x60~0x68] release date (8)
+        #    unsigned int BinLength;     ///< [0x68] Bin File Length (4) --- w by Ep/bfc
+        #    unsigned int Checksum;      ///< [0x6c] Check Sum or CRC (4) ----- w by Ep/Epcrc
+        #    unsigned int CRCLenCheck;   ///< [0x70~0x74] Length check for CRC (4) ----- w by Epcrc (total len ^ 0xAA55)
+        #    unsigned int Resv2;         ///< [0x74~0x78] reserved (4) --- reserved for other bin tools
+        #    unsigned int BinCtrl;       ///< [0x78~0x7C] Bin flag (4) --- w by bfc
+        #    ///< BIT 0.compressed enable (w by bfc)
+        #    unsigned int CRCBinaryTag;  ///< [0x7C~0x80] Binary Tag for CRC (4) ----- w by Epcrc
+        #}
+        code_entry = struct.unpack('<I', fin.read(4))[0] # code_entry_address
+        fin.seek(0x50 - 4, 1) # reserved
+        chip_name = str(struct.unpack('%ds' % (8), fin.read(8))[0])[2:-1] #отрезает b` `
+        fin.seek(8, 1) # version = FFFFFFFF
+        release_date = str(struct.unpack('8s', fin.read(8))[0])[2:-1] #отрезает b` `
+        file_length = struct.unpack('<I', fin.read(4))[0] # in bytes, should be same as in FW_HDR2
+        if (struct.unpack('<H', fin.read(2))[0] == 0xAA55):
+            read_CRC = struct.unpack('<H', fin.read(2))[0] # считали CRC из смещения 0x36E
+            CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, part_size, 0x36E) # расчитаем CRC для данных партиции
+        else:
+            read_CRC = 0 # если признака наличия CRC (0xAA55) не нашли
+            CRC = 0
+        
+        temp_parttype += ' \"\033[93m' + chip_name + '\033[0m\"' + ', ' + '\"\033[93m' + release_date + '\033[0m\"'
+        
         if addinfo:
             part_type.append(temp_parttype)
-            fin.seek(start_offset + 0x36E, 0)
-            part_crc.append(struct.unpack('<H', fin.read(2))[0])
+            part_crc.append(read_CRC)
             part_crcCalc.append(CRC)
             fin.close()
         return temp_parttype, CRC
