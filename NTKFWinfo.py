@@ -51,7 +51,7 @@
 # V6.5 - Initial support bootloader update files (LDxxxxA.bin) - NOT TESTED! DO NOT USE IT FOR REFLASH YOUR DEVICES! WRONG BOOTLOADER MAY BRICK YOUR HARDWARE!
 # V6.6 - MODELEXT partition comes with internal structure support now. Uncompress is ready to use and split partition to separate files depend on types.
 # V6.7 - MODELEXT partitions now can be compressed back with CRC fixes.
-# V6.8 - add new CRC offsets for some uncompressed partitions (like in FW96562A from Viofo A229Pro rear cam FW). Add reading chip_name and release_date info for uboot partitions
+# V6.8 - for -c command add a new CRC offset for some uncompressed partition data (like in FW96562A from Viofo A229Pro rear cam FW). Add reading chip_name and release_date info for uboot partitions
 
 CURRENT_VERSION = '6.8'
 
@@ -843,6 +843,7 @@ def BCL1_compress(part_nr, in_offset, in2_file):
     #   если по смещению 0x6C лежат FFFF а по 0x46C лежат 55AA то CRC_offset = 0x46E- изменил это из-за Viofo FW139, ввел доп. условие
     # а если по смещению 0x6C лежат 55AA то CRC_offset = 0x6E
     # а еще может быть в самом начале файла 0x100 байт данных из-за которых по смещению 0x16C лежат 55AA и CRC_offset = 0x16E
+    # а еще может быть в самом начале файла 0x200 байт данных из-за которых по смещению 0x26C лежат 55AA и CRC_offset = 0x26E
     #
     # иначе в файле прошивки нет CRC для несжатых данных
     # Если он есть то этот CRC нужно расчитать и записать до того как начать сжатие в BCL1
@@ -1540,7 +1541,11 @@ def BCL1_uncompress(in_offset, out_filename):
             if (dataread[0x16C] == 0x55) & (dataread[0x16D] == 0xAA):
                 print('Partition with 0x100 data at begin: Name="\033[93m%s\033[0m", Date="\033[93m%s\033[0m", Size=%s, CRC Offset=\033[93m0x%04X\033[0m, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x150:0x158])[0])[2:-1].replace('\\x00',''), str(struct.unpack('8s',dataread[0x160:0x168])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x168:0x16C])[0]), 0x16E, struct.unpack('<H', dataread[0x16E:0x170])[0]))
             else:
-                print('Partition data without CRC')
+                # для задней камеры на NTK96562A (от Viofo A229 Pro) появилось вот такое ещё условие
+                if (dataread[0x26C] == 0x55) & (dataread[0x26D] == 0xAA):
+                    print('Partition with 0x200 data at begin: Name="\033[93m%s\033[0m", Date="\033[93m%s\033[0m", Size=%s, CRC Offset=\033[93m0x%04X\033[0m, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x250:0x258])[0])[2:-1].replace('\\x00',''), str(struct.unpack('8s',dataread[0x260:0x268])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x268:0x26C])[0]), 0x26E, struct.unpack('<H', dataread[0x26E:0x270])[0]))
+                else:
+                    print('Partition data without CRC')
 
 
 
@@ -1710,6 +1715,8 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         #    ///< BIT 0.compressed enable (w by bfc)
         #    unsigned int CRCBinaryTag;  ///< [0x7C~0x80] Binary Tag for CRC (4) ----- w by Epcrc
         #}
+        # потом нули и начиная с 0x1000 идут данные партиции
+        
         code_entry = struct.unpack('<I', fin.read(4))[0] # code_entry_address
         fin.seek(0x50 - 4, 1) # reserved
         chip_name = str(struct.unpack('%ds' % (8), fin.read(8))[0])[2:-1] #отрезает b` `
@@ -1874,7 +1881,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         if compressAlgo in compressAlgoTypes:
             temp_parttype += '[\033[93m' + compressAlgoTypes[compressAlgo] + '\033[0m]'
         else:
-            temp_parttype += '[\033[91mcompr.algo:0x%0X\033[0m' % compressAlgo + ']'
+            temp_parttype += '[\033[91mcompr.algo:0x%0X\033[0m' % compressAlgo + ']' # if compression algo is unknown
 
         BCL1unpackedSize = struct.unpack('>I', fin.read(4))[0]
         BCL1packedSize = struct.unpack('>I', fin.read(4))[0]
@@ -1937,10 +1944,10 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
             temp_parttype = '\033[93mCKSM\033[0m'
             # как оказалось везде проставлен один тип = UBIFS - даже если внутри CKSM лежит BCL1
-            #if uiEmbType in embtypes:
-            #    temp_parttype += ' ' + embtypes[uiEmbType]
-            #else:
-            #    temp_parttype += ' unknown EmbType'
+            if uiEmbType in embtypes:
+                temp_parttype += ' ' + embtypes[uiEmbType]
+            else:
+                temp_parttype += ' \033[91munkEmbType\033[0m' # unknown embedded type of data
 
             # смотрим что внутри CKSM
             deeppart, calcCRC = GetPartitionInfo(start_offset + 0x40, 0, 0, 0)
@@ -1985,10 +1992,13 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         fin.read(8) # version 00000001
         temp_parttype += ', Build:\033[93m' + str(struct.unpack('8s', fin.read(8))[0]).replace("\\x00","")[2:-1] + '\033[0m'
         ext_bin_length = struct.unpack('<I', fin.read(4))[0] # ext_bin_length - full partition size (header + info + other types)
-        fin.seek(2, 1) # 55 AA bytes
-        uiChkValue = struct.unpack('<H', fin.read(2))[0] # CRC
-
-        CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, ext_bin_length, 0x36)
+        # 55 AA bytes
+        if (struct.unpack('>H', fin.read(2))[0] == 0x55AA):
+            uiChkValue = struct.unpack('<H', fin.read(2))[0] # read CRC value
+            CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, ext_bin_length, 0x36) # calc CRC for partition data
+        else:
+            uiChkValue = 0 # if 0x55 0xAA bytes was not found
+            CRC = 0
 
         if addinfo:
             part_type.append(temp_parttype)
