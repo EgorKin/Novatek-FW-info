@@ -52,8 +52,9 @@
 # V6.6 - MODELEXT partition comes with internal structure support now. Uncompress is ready to use and split partition to separate files depend on types.
 # V6.7 - MODELEXT partitions now can be compressed back with CRC fixes.
 # V6.8 - for -c command add a new CRC offset for some uncompressed partition data (like in FW96562A from Viofo A229Pro rear cam FW). Add reading chip_name and release_date info for uboot partitions, ImageHeaderCRC and ImageDataCRC info for uImage partitions.
+# V6.9 - Entry code point "Load Address" for some uncompressed BCL1 partitions now shown after -u command. Valuable for loading output partition file to IDA or Ghidra software.
 
-CURRENT_VERSION = '6.8'
+CURRENT_VERSION = '6.9'
 
 import os, struct, sys, argparse, array
 from datetime import datetime, timezone
@@ -1539,11 +1540,13 @@ def BCL1_uncompress(in_offset, out_filename):
             print('Partition data: Name="\033[93m%s\033[0m", Date="\033[93m%s\033[0m", Size=%s, CRC Offset=\033[93m0x%04X\033[0m, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x50:0x58])[0])[2:-1].replace('\\x00',''), str(struct.unpack('8s',dataread[0x60:0x68])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x68:0x6C])[0]), 0x6E, struct.unpack('<H', dataread[0x6E:0x70])[0]))
         else:
             if (dataread[0x16C] == 0x55) & (dataread[0x16D] == 0xAA):
-                print('Partition with 0x100 data at begin: Name="\033[93m%s\033[0m", Date="\033[93m%s\033[0m", Size=%s, CRC Offset=\033[93m0x%04X\033[0m, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x150:0x158])[0])[2:-1].replace('\\x00',''), str(struct.unpack('8s',dataread[0x160:0x168])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x168:0x16C])[0]), 0x16E, struct.unpack('<H', dataread[0x16E:0x170])[0]))
+                print('Partition with 0x100 data at begin')
+                print('Header Info at 0x100: Name="\033[93m%s\033[0m", Date="\033[93m%s\033[0m", Size=%s, CRC Offset=\033[93m0x%04X\033[0m, CRC=\033[93m0x%04X\033[0m, Load Address=\033[93m0x%08X\033[0m' % (str(struct.unpack('8s',dataread[0x150:0x158])[0])[2:-1].replace('\\x00',''), str(struct.unpack('8s',dataread[0x160:0x168])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x168:0x16C])[0]), 0x16E, struct.unpack('<H', dataread[0x16E:0x170])[0], struct.unpack('<I', dataread[0x100:0x104])[0]))
             else:
                 # для задней камеры на NTK96562A (от Viofo A229 Pro) появилось вот такое ещё условие
                 if (dataread[0x26C] == 0x55) & (dataread[0x26D] == 0xAA):
-                    print('Partition with 0x200 data at begin: Name="\033[93m%s\033[0m", Date="\033[93m%s\033[0m", Size=%s, CRC Offset=\033[93m0x%04X\033[0m, CRC=\033[93m0x%04X\033[0m' % (str(struct.unpack('8s',dataread[0x250:0x258])[0])[2:-1].replace('\\x00',''), str(struct.unpack('8s',dataread[0x260:0x268])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x268:0x26C])[0]), 0x26E, struct.unpack('<H', dataread[0x26E:0x270])[0]))
+                    print('Partition with 0x200 data at begin')
+                    print('Header Info at 0x200: Name="\033[93m%s\033[0m", Date="\033[93m%s\033[0m", Size=%s, CRC Offset=\033[93m0x%04X\033[0m, CRC=\033[93m0x%04X\033[0m, Load Address=\033[93m0x%08X\033[0m' % (str(struct.unpack('8s',dataread[0x250:0x258])[0])[2:-1].replace('\\x00',''), str(struct.unpack('8s',dataread[0x260:0x268])[0])[2:-1], '\033[93m{:,}\033[0m'.format(struct.unpack('<I', dataread[0x268:0x26C])[0]), 0x26E, struct.unpack('<H', dataread[0x26E:0x270])[0], struct.unpack('<I', dataread[0x200:0x204])[0]))
                 else:
                     print('Partition data without CRC')
 
@@ -1730,7 +1733,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
             read_CRC = 0 # если признака наличия CRC (0xAA55) не нашли
             CRC = 0
         
-        temp_parttype += ' \"\033[93m' + chip_name + '\033[0m\"' + ', ' + '\"\033[93m' + release_date + '\033[0m\"'
+        temp_parttype += ' \"\033[93m' + chip_name + ' ' + release_date + '\033[0m\"'
         
         if addinfo:
             part_type.append(temp_parttype)
