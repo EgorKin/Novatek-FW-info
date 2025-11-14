@@ -45,13 +45,13 @@
 # V5.9 - fix datetime.fromtimestamp() calls in actual Python versions
 # V6.0 - unassign uboot partition findings from partID=3. Add 'ARM Trusted Firmware-A' partition support
 # V6.1 - initial support of 'Multi-File Images' type for uImage partitions
-# V6.2 - for ARM64 rootfs partition only (part name "rootfs" is hardcoded now): change compressior algo from "lzo" to "favor_lzo" to be more closer to original partition size than with "lzo". Add "sudo" to exec cmds for UBI partitions to be sure in right file permissions.
+# V6.2 - for ARM64 rootfs partition only (part name "rootfs" is hardcoded now): change compression algo from "lzo" to "favor_lzo" to be more closer to original partition size than with "lzo". Add "sudo" to exec cmds for UBI partitions to be sure in right files permissions.
 # V6.3 - output filename is optional now for -udtb/-cdtb commands (replace extension to .dts/.dtb in input filename if output filename is not defined)
 # V6.4 - Do not change BCL1 unpacked partition size values in BCL1 header if a new partition unpacked size is less than before to be more closer to original bytes. Refactor BCL1_compress() function.
 # V6.5 - Initial support bootloader update files (LDxxxxA.bin) - NOT TESTED! DO NOT USE IT FOR REFLASH YOUR DEVICES! WRONG BOOTLOADER MAY BRICK YOUR HARDWARE!
 # V6.6 - MODELEXT partition comes with internal structure support now. Uncompress is ready to use and split partition to separate files depend on types.
 # V6.7 - MODELEXT partitions now can be compressed back with CRC fixes.
-# V6.8 - for -c command add a new CRC offset for some uncompressed partition data (like in FW96562A from Viofo A229Pro rear cam FW). Add reading chip_name and release_date info for uboot partitions
+# V6.8 - for -c command add a new CRC offset for some uncompressed partition data (like in FW96562A from Viofo A229Pro rear cam FW). Add reading chip_name and release_date info for uboot partitions, ImageHeaderCRC and ImageDataCRC info for uImage partitions.
 
 CURRENT_VERSION = '6.8'
 
@@ -1786,8 +1786,11 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         temp_parttype = 'uImage'
         MultiFileImage_content = ''
 
+        fin.seek(start_offset + 24, 0)
+        # Image Data CRC
+        image_data_CRC = struct.unpack('>I', fin.read(4))[0]
+
         # Operating System
-        fin.seek(start_offset + 28, 0)
         temp = struct.unpack('B', fin.read(1))[0]
         if temp in uImage_os:
             temp_parttype += ', OS: ' + '\"\033[93m' + uImage_os[temp] + '\033[0m\"'
@@ -1835,14 +1838,22 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         #fin.seek(part_offset[2] + 32, 0)
         temp_parttype += ', Image name: ' + '\"\033[93m' + str(fin.read(32)).replace("\\x00","")[2:-1] + '\033[0m\"' #[2:-1] for remove b' at start and ' at end and \x00 after name
 
+
+        fin.seek(start_offset + 4, 0)
+        # Image Header CRC
+        image_header_CRC = struct.unpack('>I', fin.read(4))[0]
+
         # Image Creation Timestamp
-        fin.seek(start_offset + 8, 0)
         temp = struct.unpack('>I', fin.read(4))[0]
         temp_parttype += ', created: ' + '\"\033[93m' + datetime.fromtimestamp(temp, timezone.utc).strftime('%Y-%m-%d %H:%M:%S') + '\033[0m\"'
 
         # Image Data Size
         temp = struct.unpack('>I', fin.read(4))[0]
-        temp_parttype += ', size: ' + '\"\033[93m{:,}\033[0m" bytes'.format(temp)
+        temp_parttype += ', size: ' + '\"\033[93m{:,}\033[0m\" bytes'.format(temp)
+
+        # Image Header CRC and Image Data CRC
+        temp_parttype += ', HeaderCRC: \"\033[93m0x%08X\033[0m\"' % image_header_CRC
+        temp_parttype += ', DataCRC: \"\033[93m0x%08X\033[0m\"' % image_data_CRC
 
         # print contents for Multi-File Images type
         if MultiFileImage_content != '':
