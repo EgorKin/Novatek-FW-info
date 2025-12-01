@@ -1,5 +1,5 @@
 # Novatek Firmware info (NTKFWinfo)
-Python script for work with Novatek firmware files. Show full FW info, allow extract, replace, uncompress, compress partitions, fix CRC for modded partitions and whole firmware file. Useful tool for building custom firmwares.
+Python script for work with Novatek firmware update files from manufacturers (like FWA***.bin). Show full FW info, allow extract, replace, uncompress, compress partitions, fix CRC for modded partitions and whole firmware file. Useful tool for building custom firmwares.
 Use Linux environment or WSL2 (Windows Subsystem for Linux) for properly work with UBI and SPARSE partitions.
 
 Novatek FW info is available under the terms of the GNU Public License version 3.
