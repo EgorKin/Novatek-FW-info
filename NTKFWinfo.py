@@ -33,10 +33,10 @@
 # V4.7 - BCL1 partitions CRC support
 # V4.8 - add -o option for define working dir for output partitions
 # V4.9 - add banner; pre-release version
-# V5.0 - private release
+# V5.0 - first public release
 # V5.1 - add FDT(DTB) partition uncompress/compress support
 # V5.2 - BCL1 LZ77 compatibility improvements, BCL1 LZMA DictionarySize support WIP
-# V5.3 - fix -x ALL (all partitions extraction)
+# V5.3 - fix -x ALL command (all partitions extraction)
 # V5.4 - fix additional characters in filenames support
 # V5.5 - add -udtb and -cdtb for convert DTB file to DTS file for easy view/edit application.dtb file with sensor settings and vice versa
 # V5.6 - print some additional info while unpack BCL1 partitions
@@ -53,9 +53,10 @@
 # V6.7 - MODELEXT partitions now can be compressed back with CRC fixes.
 # V6.8 - for -c command add a new CRC offset for some uncompressed partition data (like in FW96562A from Viofo A229Pro rear cam FW). Add reading chip_name and release_date info for uboot partitions, ImageHeaderCRC and ImageDataCRC info for uImage partitions.
 # V6.9 - Entry code point "Load Address" for some uncompressed BCL1 partitions now shown after -u command. Valuable for loading output partition file to IDA or Ghidra software.
-# V7.0 - Add -add command: now you be able to add a new partitions extracted via -x cmd from other firmware file. At this moment works only with NVTPACK_FW_HDR2 firwares.
+# V7.0 - Add -add command: now you may add a new partitions extracted via -x cmd from other firmware file. At this moment works only with NVTPACK_FW_HDR2 firmwares. Fix -r command when it uses with offset != 64 and CKSM partitions.
+# V7.1 - NVTPACK_FW_HDR firmwares is also supported for -add command. Fix code to add a new partition as last partition. Fix bug then only 2 partitions could be recognized in NVTPACK_FW_HDR firmware files.
 
-CURRENT_VERSION = '7.0'
+CURRENT_VERSION = '7.1'
 
 import os, struct, sys, argparse, array
 from datetime import datetime, timezone
@@ -332,7 +333,7 @@ def get_args():
 
     in_file=args.i[0]
 
-    return (in_file, is_extract, is_extract_offset, is_extract_all, is_add, is_add_file, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, is_compress, fixCRC_partID)
+    return (in_file, is_extract, is_extract_offset, is_extract_all, is_add, is_add_file, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, is_compress, fixCRC_partID, is_silent)
 
 
 
@@ -444,7 +445,7 @@ def compress_CKSM_UBI(part_nr, in2_file):
     subprocess.run('rm -rf ' + '\"' + in2_file + '/tempdir' + '\"', shell=True)
 
     # fix CRC
-    is_silent = 0
+    is_silent = -1
     fixCRC(part_id[part_nr])
 
 
@@ -493,7 +494,7 @@ def compress_CKSM_BCL(part_nr, in2_file):
     subprocess.run('rm -rf ' + '\"' + comp_filename + '\"', shell=True)
 
     # fix CRC for CKSM
-    is_silent = 0
+    is_silent = -1
     fixCRC(part_id[part_nr])
 
 
@@ -549,7 +550,7 @@ def compress_CKSM_SPARSE(part_nr, in2_file):
     os.system('rm -rf ' + '\"' + in2_file + '\"')
 
     # fix CRC
-    is_silent = 0
+    is_silent = -1
     fixCRC(part_id[part_nr])
 
 
@@ -610,7 +611,7 @@ def compress_BCL(part_nr, in2_file):
                 exit(0)
 
     # fix CRC
-    is_silent = 0
+    is_silent = -1
     fixCRC(part_id[part_nr])
 
 
@@ -651,7 +652,7 @@ def compress_FDT(part_nr, in2_file):
     subprocess.run('rm -rf ' + '\"' + comp_filename + '\"', shell=True)
 
     # fix CRC
-    is_silent = 0
+    is_silent = -1
     fixCRC(part_id[part_nr])
 
 
@@ -746,7 +747,7 @@ def compress_MODELEXT(part_nr, in2_file):
         subprocess.run('rm -rf ' + '\"' + comp_filename + '\"', shell=True)
 
         # fix CRC
-        is_silent = 0
+        is_silent = -1
         fixCRC(part_id[part_nr])
 
 
@@ -1671,7 +1672,16 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
     fin = open(in_file, 'rb')
     # go to partition start offset
     fin.seek(start_offset, 0)
-    partfirst4bytes = struct.unpack('>I', fin.read(4))[0]
+    #проверим не в конце ли мы файла уже
+    if (fin.tell() + 4) < os.stat(in_file).st_size:
+        partfirst4bytes = struct.unpack('>I', fin.read(4))[0]
+    else:
+        if addinfo:
+            part_type.append('\033[91mbad size partition\033[0m')
+            part_crc.append(0)
+            part_crcCalc.append(0)
+            fin.close()
+        return '', 0
 
     
     #dtb
@@ -1911,7 +1921,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         BCL1packedSize = struct.unpack('>I', fin.read(4))[0]
         temp_parttype += ' \033[93m{:,}\033[0m'.format(BCL1unpackedSize) + ' packed to ' + '\033[93m{:,}\033[0m bytes'.format(BCL1packedSize)
 
-        CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, BCL1packedSize + 0x10, 0x4)
+        CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, BCL1packedSize + 0x10, 0x4) # 0x10 - BCL1 header size
 
         # у всех виденных мною загрузчиков только 1 партиция BCL1 и у неё вместо CRC прописано 0000 поэтому для неё не показываем расчитанную CRC чтобы не смущать пользователя их вечным несоответствием
         if FW_BOOTLOADER == 1:
@@ -1961,8 +1971,8 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         if struct.unpack('>I', fin.read(4))[0] == 0x19070416:
             uiChkMethod = struct.unpack('<I', fin.read(4))[0] # 0 - т.е. CRC16
             uiChkValue = struct.unpack('<I', fin.read(4))[0] # само значение CRC16
-            uiDataOffset = struct.unpack('<I', fin.read(4))[0]
-            uiDataSize = struct.unpack('<I', fin.read(4))[0]
+            uiDataOffset = struct.unpack('<I', fin.read(4))[0] # стандарно тут 0x40 (64 байта на CKSM заголовок)
+            uiDataSize = struct.unpack('<I', fin.read(4))[0] # размер данных внутри CKSM
             uiPaddingSize = struct.unpack('<I', fin.read(4))[0]
             uiEmbType = struct.unpack('<I', fin.read(4))[0]
 
@@ -2038,7 +2048,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
     # unknown part
     if addinfo:
-        part_type.append('\033[91munknown part\033[0m')
+        part_type.append('\033[91munknown partition\033[0m')
         part_crc.append(0)
         part_crcCalc.append(0)
         fin.close()
@@ -2104,7 +2114,9 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                 print('Add ', end='') # если добавляем новую партицию
             else:
                 print('Replace ', end='') # если заменяем партицию
-            print('partition ID %i from 0x%08X + 0x%08X using inputfile \033[93m%s\033[0m' % (is_replace, part_startoffset[part_nr], is_replace_offset, is_replace_file))
+            print('partition ID %i at 0x%08X ' % (is_replace, part_startoffset[part_nr]), end='')
+            if is_replace_offset != 0: print('+ 0x%08X ' % is_replace_offset, end='')
+            print('using inputfile \033[93m%s\033[0m' % is_replace_file)
         freplace = open(is_replace_file, 'rb')
         replacedata = freplace.read()
         freplace.close()
@@ -2182,8 +2194,9 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                 fin.write(struct.pack('<I', filesize))
                 total_file_size = filesize # корректируем данные в нашей переменной
 
-                # если заменяем CKSM-партицию то в её заголовке нужно исправить DataSize
-                if part_type[part_nr][:13] == '\033[93mCKSM\033[0m':
+                # если заменяем данные внутри CKSM-партиции то в её заголовке нужно исправить DataSize
+                # если меняется с самого начала то в файле уже должен быть правильный заголовок (CKSM можно заменить и на иной тип партиции)
+                if (part_type[part_nr][:13] == '\033[93mCKSM\033[0m' and is_replace_offset > 0):
                     fin.seek(part_startoffset[part_nr] + 0x14, 0)
                     fin.write(struct.pack('<I', newsize - 64)) # newsize - это с учетом CKSM заголовка(64 байта)
 
@@ -2257,8 +2270,9 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                     if FW_BOOTLOADER == 0:
                         total_file_size = filesize # корректируем данные в нашей переменной
 
-                    # если заменяем CKSM-партицию то в её заголовке нужно исправить DataSize
-                    if part_type[part_nr][:13] == '\033[93mCKSM\033[0m':
+                    # если заменяем данные внутри CKSM-партиции то в её заголовке нужно исправить DataSize
+                    # если меняется с самого начала то в файле уже должен быть правильный заголовок (CKSM можно заменить и на иной тип партиции)
+                    if (part_type[part_nr][:13] == '\033[93mCKSM\033[0m' and is_replace_offset > 0):
                         fin.seek(part_startoffset[part_nr] + 0x14, 0)
                         fin.write(struct.pack('<I', newsize - 64)) # newsize - это с учетом CKSM заголовка(64 байта)
 
@@ -2322,8 +2336,9 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                     # TotalSize в NVTPACK_FW_HDR не меняется т.к. в нем только размеры заголовков
                     total_file_size = filesize # корректируем данные в нашей переменной
 
-                    # если заменяем CKSM-партицию то в её заголовке нужно исправить DataSize
-                    if part_type[part_nr][:13] == '\033[93mCKSM\033[0m':
+                    # если заменяем данные внутри CKSM-партиции то в её заголовке нужно исправить DataSize
+                    # если меняется с самого начала то в файле уже должен быть правильный заголовок (CKSM можно заменить и на иной тип партиции)
+                    if (part_type[part_nr][:13] == '\033[93mCKSM\033[0m' and is_replace_offset > 0):
                         fin.seek(part_startoffset[part_nr] + 0x14, 0)
                         fin.write(struct.pack('<I', newsize - 64)) # newsize - это с учетом CKSM заголовка(64 байта)
 
@@ -2454,9 +2469,10 @@ def fixCRC(partID):
 
 def main():
     global in_file
+    global is_silent
     #global in_offset
     global out_file
-    in_file, is_extract, is_extract_offset, is_extract_all, is_add, is_add_file, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, is_compress, fixCRC_partID = get_args()
+    in_file, is_extract, is_extract_offset, is_extract_all, is_add, is_add_file, is_replace, is_replace_offset, is_replace_file, is_uncompress, is_uncompress_offset, is_compress, fixCRC_partID, is_silent = get_args()
     global partitions_count
     global FW_HDR
     global FW_HDR2
@@ -2488,13 +2504,15 @@ def main():
     FW_BOOTLOADER = 0
 
     # NVTPACK_FW_HDR2 GUID check
-    if struct.unpack('<I', fin.read(4))[0] == 0xD6012E07:
-        if struct.unpack('<H', fin.read(2))[0] == 0x10BC:
-            if struct.unpack('<H', fin.read(2))[0] == 0x4F91:
-                if struct.unpack('>H', fin.read(2))[0] == 0xB28A:
-                    if struct.unpack('>I', fin.read(4))[0] == 0x352F8226:
-                        if struct.unpack('>H', fin.read(2))[0] == 0x1A50:
-                            FW_HDR2 = 1
+    #проверим не в конце ли мы файла уже
+    if (fin.tell() + 16) < os.stat(in_file).st_size:
+        if struct.unpack('<I', fin.read(4))[0] == 0xD6012E07:
+            if struct.unpack('<H', fin.read(2))[0] == 0x10BC:
+                if struct.unpack('<H', fin.read(2))[0] == 0x4F91:
+                    if struct.unpack('>H', fin.read(2))[0] == 0xB28A:
+                        if struct.unpack('>I', fin.read(4))[0] == 0x352F8226:
+                            if struct.unpack('>H', fin.read(2))[0] == 0x1A50:
+                                FW_HDR2 = 1
 
     if FW_HDR2 != 1:
         print("\033[91mNVTPACK_FW_HDR2\033[0m not found")
@@ -2502,15 +2520,16 @@ def main():
         if struct.unpack('>I', fin.read(4))[0] == 0x42434C31: # == BCL1
             part_startoffset.append(0)
             fin.seek(0xC, 0)
-            part_size.append(struct.unpack('>I', fin.read(4))[0] + 0x10)  # + 0x10 потому что мы будем показывать размер партиции с заголовком а не размер данных внутри BCL1
+            zeroBCL1_part_size = struct.unpack('>I', fin.read(4))[0] + 0x10 # + 0x10 потому что мы будем показывать размер партиции с заголовком BCL1, а не размер данных внутри BCL1
+            part_size.append(zeroBCL1_part_size)
             part_id.append(0)
-            part_endoffset.append(0 + part_size[0])
+            part_endoffset.append(part_size[0])
 
             fin.seek(part_size[0], 0)
             #тут должен быть NVTPACK_FW_HDR
             FW_HDR = 0
             #проверим не в конце ли мы файла уже
-            if (fin.tell() + 0x10) < os.stat(in_file).st_size:
+            if (fin.tell() + 16) < os.stat(in_file).st_size:
                 # если не в конце то проверяем дальше
                 # NVTPACK_FW_HDR GUID check
                 if struct.unpack('<I', fin.read(4))[0] == 0x8827BE90:
@@ -2544,18 +2563,117 @@ def main():
                         print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m' % (checksum_value, CRC_FW))
 
                 # read partitions table info
-                fin.seek(part_size[0] + 0x1C, 0)
+                fin.seek(part_size[0] + 0x1C, 0) # 0x1C - это NVTPACK_FW_HDR + 3*4 байта (NVTPACK_FW_HDR_AND_PARTITIONS_size, checksum_value, partitions_count)
 
-                for a in range(partitions_count):
-                    a = 1 # так как нулевую партицию мы уже занесли в массивы
-                    part_startoffset.append(struct.unpack('<I', fin.read(4))[0])
-                    part_size.append(struct.unpack('<I', fin.read(4))[0])
-                    part_id.append(struct.unpack('<I', fin.read(4))[0])
-                    part_endoffset.append(part_startoffset[a] + part_size[a])
+                # если хотим добавить партицию проверим сначала что файл с новой партицией существует
+                if(is_add != -1):
+                    if not os.path.isfile(is_add_file):
+                        print('\033[91m%s file does not found, exit\033[0m' % is_add_file)
+                        exit(0)
+
+                new_part_added = 0
+                padding = 0
+                # считываем таблицу партиций (не только при добавлении партиции а всегда)
+                for a in range(1, partitions_count): # с 1 так как нулевую партицию BCL1 мы уже занесли в массивы да и она не тносится к таблице партиций
+                    part_startoffset_read = struct.unpack('<I', fin.read(4))[0]
+                    part_size_read = struct.unpack('<I', fin.read(4))[0]
+                    part_id_read = struct.unpack('<I', fin.read(4))[0]
+
+                    # если хотим добавить партицию
+                    if (is_add != -1 and new_part_added == 0): # тут is_add = id добавляемой партиции
+                        if(a > 0):
+                            last_read_id = part_id[a-1]
+                        else:
+                            last_read_id = -1 # не было еще ничего раньше
+                        if(last_read_id < is_add and part_id_read > is_add): # нашли между какими id добавлять новый несуществующий
+                            # добавим новую партицию нулевого размера
+                            part_startoffset.append(part_startoffset_read)
+                            part_size.append(0)
+                            part_id.append(is_add)
+                            part_endoffset.append(part_startoffset_read) # т.к. размер = 0 (пока что)
+                            new_part_added = 1
+
+                    # добавляем все существующие в файле партиции
+                    part_startoffset.append(part_startoffset_read)
+                    part_size.append(part_size_read)
+                    part_id.append(part_id_read)
+                    part_endoffset.append(part_startoffset_read + part_size_read)
+
+            if (FW_HDR == 1 and is_add != -1): # только если у нас есть таблица партиций версии 1 (у старых просто BCL1 прошивок пока не сделано добавление партиций)
+                if new_part_added == 0:
+                    # если хотим добавить партицию с ID больше чем у последней партиции (т.е. добавить в конец)
+                    if is_add > part_id[partitions_count-1]:
+                        # добавим новую партицию нулевого размера
+
+                        # при добавлении между существующими партициями новая встанет на смещение последующей, а та уже выровнена по 4 байтам и таблица расширится на 12 байт что кратно 4 т.е. следующие смещения не пострадают
+                        # а вот при добавлении в конец прошики это нужно сделать самим
+                        # изначально использовалось part_endoffset[partitions_count-1] но попадаются последние партиции с 00 в конце уже после data - перешел на размер файла total_file_size (он еще не увеличен тут)
+                        padding = 4 - (total_file_size % 4)
+                        if padding == 4: padding = 0
+
+                        part_startoffset.append(total_file_size + padding)
+                        part_size.append(0)
+                        part_id.append(is_add)
+                        part_endoffset.append(total_file_size + padding) # т.к. размер = 0 (пока что)
+                        new_part_added = 1
+
+            # перезапишем файл с новой таблицей партиций изменив смещения партиций на 12 байт(размер записи о новой партиции)
+            if is_add != -1:
+                if new_part_added == 0:
+                    if is_add in part_id:
+                        print('\033[91mPartititon with ID=%i already exist. Use \033[93m-r\033[91m for replace\033[0m' % (is_add))
+                    else:
+                        print('\033[91mCould not add partititon with ID=%i\033[0m' % (is_add))
+                    fin.close()
+                    exit(0)
+                else:
+                    fin.close()
+                    fin = open(in_file, 'r+b') # именно r+b для ЗАМЕНЫ данных
+                    fin.seek(part_size[0] + NVTPACK_FW_HDR_AND_PARTITIONS_size, 0)
+                    read_end = fin.read() # считали всё что после старой таблицы партиций
+
+                    partitions_count += 1 # т.к. добавили партицию
+                    NVTPACK_FW_HDR_AND_PARTITIONS_size += 12 # т.к. добавили партицию
+                    total_file_size += 12 # а orig_file_size не меняем чтобы при фиксе CRC всего файла показать разницу размеров старого и нового файла
+                    # запишем новое кол-во партиций и новый размер файла
+                    fin.seek(part_size[0] + 0x10, 0) # 0x10 - это начало + NVTPACK_FW_HDR
+                    fin.write(struct.pack('<I', NVTPACK_FW_HDR_AND_PARTITIONS_size))
+                    fin.seek(4, 1) # пропускаем старое значение CRC
+                    fin.write(struct.pack('<I', partitions_count-1)) # -1 т.к. не надо учитывать нулевую партицию BCL1, она не в таблице партиций
+
+                    # на начало таблицы партиций (seek не нужен, му уже по этому смещению)
+                    #fin.seek(part_size[0] + 0x1C, 0) # 0x1C - это NVTPACK_FW_HDR + 3*4 байта (NVTPACK_FW_HDR_AND_PARTITIONS_size, checksum_value, partitions_count)
+                    # пишем новые данные о партициях [part_startoffset, part_size, part_id]
+                    for a in range(1, partitions_count): # 1 - чтобы пропустить нулевую BCL1 партицию
+                        # таблица расширится на 12 байт что кратно 4 т.е. следующие смещения не пострадают
+                        part_startoffset[a] = part_startoffset[a] + 12 # после добавления новой партиции всё будет сдвинуто на 12 байт записи о ней в таблице
+                        part_endoffset[a] = part_endoffset[a] + 12  # после добавления новой партиции всё будет сдвинуто на 12 байт записи о ней в таблице
+                        fin.write(struct.pack('<I', part_startoffset[a]))
+                        fin.write(struct.pack('<I', part_size[a]))
+                        fin.write(struct.pack('<I', part_id[a]))
+                    fin.write(read_end) # дописываем данные
+                    # дописываем нулевые байты padding перед новой последней партицией для выравнивения ее адреса смещения по 4 байтам
+                    fin.write(b'\x00' * padding)
+                    fin.close()
 
             # read each partition info
             for a in range(partitions_count):
                 GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a])
+
+            # сделаем замену новой нулевой по размеру партиции на данные из файла (до этого нужно сначала прочесть все партиции)
+            # и испрвавим все CRC
+            if is_add != -1:
+                is_replace = is_add
+                is_replace_offset = 0
+                is_replace_file = is_add_file
+                fin.close()
+
+                # show output print
+                is_silent = -1
+
+                partition_replace(is_replace, is_replace_offset, is_replace_file)
+                fixCRC(is_add)
+                exit(0)
         else:
             print("\033[91mBCL1\033[0m not found")
 
@@ -2573,7 +2691,7 @@ def main():
                 fin.seek(0x30, 0) # goto 55AA offset
                 read55AA = struct.unpack('>H', fin.read(2))[0] #если тут 55AA то за ним 2 байта CRC
                 if read1 == read2 and read1 == read3 and constant == 0x000580E0 and read55AA == 0x55AA:
-                    # all OK, it is a bootloader
+                    # all OK, it is a bootloader probably
                     print('Input file detects as \033[93mBOOTLOADER\033[0m')
                     FW_BOOTLOADER = 1
 
@@ -2655,6 +2773,8 @@ def main():
                 exit(0)
 
         new_part_added = 0
+        padding = 0
+        # считываем таблицу партиций (не только при добавлении партиции а всегда)
         for a in range(partitions_count):
             part_startoffset_read = struct.unpack('<I', fin.read(4))[0]
             part_size_read = struct.unpack('<I', fin.read(4))[0]
@@ -2680,10 +2800,33 @@ def main():
             part_id.append(part_id_read)
             part_endoffset.append(part_startoffset_read + part_size_read)
 
+        if is_add != -1:
+            if(new_part_added == 0):
+                # если хотим добавить партицию с ID больше чем у последней партиции (т.е. добавить в конец)
+                if is_add > part_id[partitions_count-1]:
+                    # добавим новую партицию нулевого размера
+
+                    # при добавлении между существующими партициями новая встанет на смещение последующей, а та уже выровнена по 4 байтам и таблица расширится на 12 байт что кратно 4 т.е. следующие смещения не пострадают
+                    # а вот при добавлении в конец прошики это нужно сделать самим
+                    # изначально использовалось part_endoffset[partitions_count-1] но попадаются последние партиции с 00 в конце уже после data - пока перешел на размер файла total_file_size (он еще не увеличен тут)
+                    padding = 4 - (total_file_size % 4)
+                    if padding == 4: padding = 0
+
+                    part_startoffset.append(total_file_size + padding)
+                    part_size.append(0)
+                    part_id.append(is_add)
+                    part_endoffset.append(total_file_size + padding) # т.к. размер = 0 (пока что)
+                    new_part_added = 1
+
         # перезапишем файл с новой таблицей партиций изменив смещения партиций на 12 байт(размер записи о новой партиции)
         if is_add != -1:
             if(new_part_added == 0):
-                print('\033[91mPartititon with ID=%i already exist. Use \033[93m-r\033[91m for replace\033[0m' % (is_add))
+                if is_add in part_id:
+                    print('\033[91mPartititon with ID=%i already exist. Use \033[93m-r\033[91m for replace\033[0m' % (is_add))
+                else:
+                    print('\033[91mCould not add partititon with ID=%i\033[0m' % (is_add))
+                fin.close()
+                exit(0)
             else:
                 fin.close()
                 fin = open(in_file, 'r+b') # именно r+b для ЗАМЕНЫ данных
@@ -2691,7 +2834,7 @@ def main():
                 read_end = fin.read() # считали всё что после старой таблицы партиций
 
                 partitions_count += 1 # т.к. добавили партицию
-                total_file_size += 12 # orig_file_size не меняем чтобы пофиксить CRC всего файла автоматом
+                total_file_size += 12 # а orig_file_size не меняем чтобы при фиксе CRC всего файла показать разницу размеров старого и нового файла
                 # запишем новое кол-во партиций и новый размер файла
                 fin.seek(0x18, 0)
                 fin.write(struct.pack('<I', partitions_count))
@@ -2700,12 +2843,14 @@ def main():
                 fin.seek(NVTPACK_FW_HDR2_size, 0) # на начало таблицы партиций
                 # пишем новые данные о партициях [part_startoffset, part_size, part_id]
                 for a in range(partitions_count):
-                    part_startoffset[a] = part_startoffset[a] + 12 # после добавления новой партиции всё будет сдвиноуто на 12 байт записи о ней в таблице
-                    part_endoffset[a] = part_endoffset[a] + 12  # после добавления новой партиции всё будет сдвиноуто на 12 байт записи о ней в таблице
+                    part_startoffset[a] = part_startoffset[a] + 12 # после добавления новой партиции всё будет сдвинуто на 12 байт записи о ней в таблице
+                    part_endoffset[a] = part_endoffset[a] + 12  # после добавления новой партиции всё будет сдвинуто на 12 байт записи о ней в таблице
                     fin.write(struct.pack('<I', part_startoffset[a]))
                     fin.write(struct.pack('<I', part_size[a]))
                     fin.write(struct.pack('<I', part_id[a]))
                 fin.write(read_end) # дописываем данные
+                # дописываем нулевые байты padding перед новой последней партицией для выравнивения ее адреса смещения по 4 байтам
+                fin.write(b'\x00' * padding)
                 fin.close()
 
 
@@ -2713,13 +2858,17 @@ def main():
         for a in range(partitions_count):
             GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a])
 
-        # сделаем замену новой нулевой партиции на данные из файла (нужно было сначала прочесть все партиции)
+        # сделаем замену новой нулевой по размеру партиции на данные из файла (до этого нужно сначала прочесть все партиции)
         # и испрвавим все CRC
         if is_add != -1:
             is_replace = is_add
             is_replace_offset = 0
             is_replace_file = is_add_file
             fin.close()
+
+            # show output print
+            is_silent = -1
+            
             partition_replace(is_replace, is_replace_offset, is_replace_file)
             fixCRC(is_add)
             exit(0)
