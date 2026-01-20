@@ -1589,10 +1589,14 @@ def decompress_lzma(data):
 def fillIDPartNames(startat):
     global in_file
     
+    if (len(dtbpart_ID) > 0 and len(dtbpart_name) > 0 and len(dtbpart_filename) > 0):
+        # print('DTB was parsed early, skip adding a same names from fdt.backup')
+        return
     
     fin = open(in_file, 'r+b')
     fin.seek(startat+0x34, 0)
 
+    # TODO можно улучшить код, парся номера id, а не предполагая что они всегда идут по инкременту и без пропусков номеров
     #-----начали секцию----
     starting = struct.unpack('>I', fin.read(4))[0] #00000001
     while(starting == 0x00000001):
@@ -1669,24 +1673,23 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
     global FW_BOOTLOADER
 
 
-    fin = open(in_file, 'rb')
-    # go to partition start offset
-    fin.seek(start_offset, 0)
-    #проверим не в конце ли мы файла уже
-    if (fin.tell() + 4) < os.stat(in_file).st_size:
-        partfirst4bytes = struct.unpack('>I', fin.read(4))[0]
-    else:
+    # проверим не выйдем ли мы за границу файла при чтении партиции
+    if (start_offset + part_size) > os.stat(in_file).st_size or part_size < 4: # 4 это как минимум-минимум
         if addinfo:
             part_type.append('\033[91mbad size partition\033[0m')
             part_crc.append(0)
             part_crcCalc.append(0)
-            fin.close()
         return '', 0
 
-    
+    fin = open(in_file, 'rb')
+    # go to partition start offset
+    fin.seek(start_offset, 0)
+    partfirst4bytes = struct.unpack('>I', fin.read(4))[0]
+
+
     #dtb
     if partfirst4bytes == 0xD00DFEED:
-        temp_parttype = '\033[93mDTB\033[0m(device tree blob)'
+        temp_parttype = '\033[93mDTB\033[0m device tree blob'
         CRC = 0
         if addinfo:
             part_type.append(temp_parttype)
@@ -1705,7 +1708,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
 
     # atf = ARM Trusted Firmware-A
-    if len(dtbpart_name) != 0 and str(dtbpart_name[partID]).lower() == 'atf':
+    if len(dtbpart_name) > partID and str(dtbpart_name[partID]).lower() == 'atf':
         temp_parttype = 'ARM Trusted Firmware'
         CRC = 0
         if addinfo:
@@ -1718,7 +1721,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
     # uboot
     # if partID == 3: # ранее всегда 3 партиция - это uboot
-    if len(dtbpart_name) != 0 and str(dtbpart_name[partID]).lower() == 'uboot':
+    if len(dtbpart_name) > partID and str(dtbpart_name[partID]).lower() == 'uboot':
         temp_parttype = 'uboot'
         # в uboot партиции пропускаем первые 0x300 байт - пока что так
         fin.seek(0x300 - 4, 1) # 4 байта считали ранее как partfirst4bytes
@@ -1984,7 +1987,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
                 temp_parttype += ' \033[91munkEmbType\033[0m' # unknown embedded type of data
 
             # смотрим что внутри CKSM
-            deeppart, calcCRC = GetPartitionInfo(start_offset + uiDataOffset, 0, 0, 0)
+            deeppart, calcCRC = GetPartitionInfo(start_offset + uiDataOffset, uiDataSize + uiPaddingSize, partID, 0) # внетренние данные не считаем за отдельную партицию поэтому 0
             if deeppart != '':
                 temp_parttype += '\033[94m<--\033[0m' + deeppart
 
@@ -2658,7 +2661,7 @@ def main():
 
             # read each partition info
             for a in range(partitions_count):
-                GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a])
+                GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a], 1)
 
             # сделаем замену новой нулевой по размеру партиции на данные из файла (до этого нужно сначала прочесть все партиции)
             # и испрвавим все CRC
@@ -2721,9 +2724,9 @@ def main():
                         else:
                             print('Bootloader file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m' % (checksum_value, CRC_FW))
 
-                    bootpart, somecrc = GetPartitionInfo(BCL1_offset, 0, 0)
+                    bootpart, somecrc = GetPartitionInfo(BCL1_offset, part_size[0], 0, 1)
                     if bootpart != '':
-                        partitions_count = 1 # значит у нас только 1 партиция - BCL1
+                        partitions_count = 1 # значит у нас только 1 партиция - BCL1 (а у загрузчика так и есть всегда)
                 else:
                     exit(0) # ничего не найдено
             else:
@@ -2856,7 +2859,7 @@ def main():
 
         # read each partition info
         for a in range(partitions_count):
-            GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a])
+            GetPartitionInfo(part_startoffset[a], part_size[a], part_id[a], 1)
 
         # сделаем замену новой нулевой по размеру партиции на данные из файла (до этого нужно сначала прочесть все партиции)
         # и испрвавим все CRC
@@ -2868,7 +2871,7 @@ def main():
 
             # show output print
             is_silent = -1
-            
+
             partition_replace(is_replace, is_replace_offset, is_replace_file)
             fixCRC(is_add)
             exit(0)
@@ -2878,12 +2881,12 @@ def main():
         #if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
         #    # looking into dtb partition for partition id - name - filename info
         #    SearchPartNamesInDTB(partitions_count)
-        
-        
-        
-    
+
+
+
+
     # для всех - и для FW_HDR и для FW_HDR2
-    
+
     # extract partition by ID to outputfile
     if is_extract != -1:
         fin.close()
@@ -3054,9 +3057,15 @@ def main():
             print(' ----------------------------------------------------------------------------------------------------------------------')
             for a in range(partitions_count):
                 if part_crc[a] == part_crcCalc[a]:
-                    print("  %2i    %-15s  0x%08X - 0x%08X     %+11s     0x%04X     \033[92m0x%04X\033[0m     %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
+                    color = '92m' # green
                 else:
-                    print("  %2i    %-15s  0x%08X - 0x%08X     %+11s     0x%04X     \033[91m0x%04X\033[0m     %s" % (part_id[a], dtbpart_name[part_id[a]], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
+                    color = '91m' # red
+                # есть ли такой индекс в именах партиций
+                if len(dtbpart_name) > part_id[a]:
+                    curr_partition_name = dtbpart_name[part_id[a]]
+                else:
+                    curr_partition_name = ''
+                print("  %3i    %-15s  0x%08X - 0x%08X     %+11s     0x%04X     \033[%s0x%04X\033[0m     %s" % (part_id[a], curr_partition_name, part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], color, part_crcCalc[a], part_type[a]))
             print(" ----------------------------------------------------------------------------------------------------------------------")
         # если dtb нет - то информацию без имен партиций
         else:
@@ -3065,9 +3074,10 @@ def main():
             print(" ----------------------------------------------------------------------------------------------------------------------")
             for a in range(partitions_count):
                 if part_crc[a] == part_crcCalc[a]:
-                    print("  %2i     0x%08X - 0x%08X     %+11s     0x%04X     \033[92m0x%04X\033[0m     %s" % (part_id[a], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
+                    color = '92m' # green
                 else:
-                    print("  %2i     0x%08X - 0x%08X     %+11s     0x%04X     \033[91m0x%04X\033[0m     %s" % (part_id[a], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], part_crcCalc[a], part_type[a]))
+                    color = '91m' # red
+                print("  %3i     0x%08X - 0x%08X     %+11s     0x%04X     \033[%s0x%04X\033[0m     %s" % (part_id[a], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], color, part_crcCalc[a], part_type[a]))
             print(" ----------------------------------------------------------------------------------------------------------------------")
 
 
