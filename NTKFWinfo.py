@@ -54,7 +54,7 @@
 # V6.8 - for -c command add a new CRC offset for some uncompressed partition data (like in FW96562A from Viofo A229Pro rear cam FW). Add reading chip_name and release_date info for uboot partitions, ImageHeaderCRC and ImageDataCRC info for uImage partitions.
 # V6.9 - Entry code point "Load Address" for some uncompressed BCL1 partitions now shown after -u command. Valuable for loading output partition file to IDA or Ghidra software.
 # V7.0 - Add -add command: now you may add a new partitions extracted via -x cmd from other firmware file. At this moment works only with NVTPACK_FW_HDR2 firmwares. Fix -r command when it uses with offset != 64 and CKSM partitions.
-# V7.1 - NVTPACK_FW_HDR firmwares is also supported for -add command. Fix code to add a new partition as last partition. Fix bug then only 2 partitions could be recognized in NVTPACK_FW_HDR firmware files.
+# V7.1 - NVTPACK_FW_HDR firmwares is also supported for -add command. Fix code to add a new partition as last partition. Fix bug then no more than 2 partitions could be recognized in NVTPACK_FW_HDR firmware files (never seen such FWs yet but improve code).
 
 CURRENT_VERSION = '7.1'
 
@@ -1596,8 +1596,9 @@ def fillIDPartNames(startat):
     fin = open(in_file, 'r+b')
     fin.seek(startat+0x34, 0)
 
-    # TODO можно улучшить код, парся номера id, а не предполагая что они всегда идут по инкременту и без пропусков номеров
-    #-----начали секцию----
+    # TODO можно улучшить код, парся номера id не предполагая что они всегда идут по инкременту
+    increment_ID = 0
+    # -----начали секцию----
     starting = struct.unpack('>I', fin.read(4))[0] #00000001
     while(starting == 0x00000001):
         #вычисляем длину id
@@ -1609,36 +1610,43 @@ def fillIDPartNames(startat):
         #print(id_length)
         fin.seek(-1*(id_length+1), 1) # вернемся на начало имени id
         # считаем idx
-        idname = str(struct.unpack('%ds' % (id_length), fin.read(id_length))[0])[2:-1] #отрезает b` `
-        #print(idname)
-        dtbpart_ID.append(idname)
-        fin.read(4 - (id_length%4)) #дочитываем все 00 которые нужны для выравнивания по 4 байта
+        id_textname = str(struct.unpack('%ds' % (id_length), fin.read(id_length))[0])[4:-1] # отрезает b` ` и еще текст "id" перед цифрой
+        #print(id_textname)
+        dtbpart_ID.append(id_textname)
+        fin.read(4 - (id_length%4)) # дочитываем все 00 которые нужны для выравнивания по 4 байта
         
         fin.read(4) #00000003
-        lengthname = struct.unpack('>I', fin.read(4))[0]
-        fin.read(4) #00000223
-        shortname = str(struct.unpack('%ds' % (lengthname-1), fin.read(lengthname-1))[0])[2:-1] #отрезает b` `
+        lengthname = struct.unpack('>I', fin.read(4))[0] # с учетом \0 в конце имени
+        fin.read(4) #000002xx
+        shortname = str(struct.unpack('%ds' % (lengthname-1), fin.read(lengthname-1))[0])[2:-1] # отрезает b` `
         #print(shortname)
+
+        # если считанный id не идёт по-очереди (есть пропуск в нумерации) то для всех пропущенных id добавим пустое имя
+        while (id_textname != str(increment_ID)):
+            dtbpart_name.append('')
+            increment_ID += 1
+
         dtbpart_name.append(shortname)
         if lengthname > 1:
-            fin.read(4 - ((lengthname-1)%4)) #дочитываем все 00 которые нужны для выравнивания по 4 байта
+            fin.read(4 - ((lengthname-1)%4)) # дочитываем все 00 которые нужны для выравнивания по 4 байта (у ARM64 такое же выравнивание в fdt)
         else:
-            fin.read(4) #если имени нет то дочитываются все 4 байта
+            fin.read(4) # если имени нет то дочитываются все 4 байта
         
         fin.read(4) #00000003
-        lengthfilename = struct.unpack('>I', fin.read(4))[0]
+        lengthfilename = struct.unpack('>I', fin.read(4))[0] # с учетом \0 в конце имени
         fin.read(4) #00000232
-        filename = str(struct.unpack('%ds' % (lengthfilename-1), fin.read(lengthfilename-1))[0])[2:-1] #отрезает b` `
+        filename = str(struct.unpack('%ds' % (lengthfilename-1), fin.read(lengthfilename-1))[0])[2:-1] # отрезает b` `
         #print(filename)
         dtbpart_filename.append(filename)
         if lengthfilename > 1:
-            fin.read(4 - ((lengthfilename-1)%4)) #дочитываем все 00 которые нужны для выравнивания по 4 байта
+            fin.read(4 - ((lengthfilename-1)%4)) # дочитываем все 00 которые нужны для выравнивания по 4 байта
         else:
-            fin.read(4) #если имени нет то дочитываются все 4 байта
+            fin.read(4) # если имени нет то дочитываются все 4 байта
         
         fin.read(4) #00000002
-        #-----закончили секцию----
-        
+        # -----закончили секцию----
+
+        increment_ID += 1
         starting = struct.unpack('>I', fin.read(4))[0] #00000001
     
     fin.close()
@@ -1672,7 +1680,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
     global is_ARM64
     global FW_BOOTLOADER
 
-
+    # TODO можно улучшить код, считывая весь размер part_size и ища magic_bytes только в его границах - будет быстрее чем seek() по файлу и правильнее(не будем выходить за партицию при поиске байт)
     # проверим не выйдем ли мы за границу файла при чтении партиции
     if (start_offset + part_size) > os.stat(in_file).st_size or part_size < 4: # 4 это как минимум-минимум
         if addinfo:
@@ -3051,7 +3059,7 @@ def main():
     # если вообще что-то нашли
     if partitions_count > 0:
         # если что-то нашли в dtb то выводим расширенную информацию
-        if len(dtbpart_ID) != 0:
+        if len(dtbpart_name) != 0:
             print(' -------------------------------------------------- PARTITIONS INFO ---------------------------------------------------')
             print('|  ID   NAME            START_OFFSET  END_OFFSET         SIZE       ORIG_CRC   CALC_CRC              TYPE              |')
             print(' ----------------------------------------------------------------------------------------------------------------------')
