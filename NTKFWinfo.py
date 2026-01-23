@@ -55,8 +55,9 @@
 # V6.9 - Entry code point "Load Address" for some uncompressed BCL1 partitions now shown after -u command. Valuable for loading output partition file to IDA or Ghidra software.
 # V7.0 - Add -add command: now you may add a new partitions extracted via -x cmd from other firmware file. At this moment works only with NVTPACK_FW_HDR2 firmwares. Fix -r command when it uses with offset != 64 and CKSM partitions.
 # V7.1 - NVTPACK_FW_HDR firmwares is also supported for -add command. Fix code to add a new partition as last partition. Fix bug then no more than 2 partitions could be recognized in NVTPACK_FW_HDR firmware files (never seen such FWs yet but improve code).
+# V7.2 - Raw data partition support was added. It is for really old firmwares that does not have any headers and only 1 raw data partition with CRC (detects via "NT9" text in BinInfo1). No need to uncompress, edit file and do -fixCRC
 
-CURRENT_VERSION = '7.1'
+CURRENT_VERSION = '7.2'
 
 import os, struct, sys, argparse, array
 from datetime import datetime, timezone
@@ -85,6 +86,12 @@ dtbpart_name = []
 dtbpart_filename = []
 
 is_ARM64 = 0 # unknown by default, flag for apply favor_lzo compression algo in UBI rootfs partition
+
+# defines from SDKs
+NVTPACK_CHKSUM_HDR_VERSION = 0x16040719
+NVTPACK_FW_HDR2_VERSION = 0x16071515
+NVTPACK_VER = b'16072017' # NVTPACK_VER_13012816,  ///< NT9666X, NT9850X   OR   NVTPACK_VER_16072017,      ///< NT9668X
+
 
 # defines from uboot source code
 uImage_os = {
@@ -346,7 +353,7 @@ def MemCheck_CalcCheckSum16Bit(input_file, in_offset, uiLen, ignoreCRCoffset):
     fin.seek(in_offset, 0)
     fread = fin.read(uiLen)
     fin.close()
-    
+
     #читаем по 2 байта в little endian
     for chunk in struct.unpack("<%sH" % num_words, fread[0:num_words*2]):
         if pos*2 != ignoreCRCoffset:
@@ -359,7 +366,7 @@ def MemCheck_CalcCheckSum16Bit(input_file, in_offset, uiLen, ignoreCRCoffset):
         #print('or 0x%08X' % struct.unpack('>H', read)[0])
         #print('CRC=0x%08X' % uiSum)
         
-
+    
     #print('CRC=0x%08X' % uiSum)
     uiSum = uiSum & 0xFFFF
     uiSum = (~uiSum & 0xFFFF) + 1
@@ -1695,7 +1702,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
     partfirst4bytes = struct.unpack('>I', fin.read(4))[0]
 
 
-    #dtb
+    # dtb
     if partfirst4bytes == 0xD00DFEED:
         temp_parttype = '\033[93mDTB\033[0m device tree blob'
         CRC = 0
@@ -1707,7 +1714,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
             # перенес сюда получение названий партиций
             fin.seek(start_offset, 0)
             dtbfile = fin.read(part_size)
-            startat = dtbfile.find(b'NVTPACK_FW_INI_16072017')
+            startat = dtbfile.find(b'NVTPACK_FW_INI_' + NVTPACK_VER) # b'16072017'
             if startat != -1:
                 fillIDPartNames(start_offset + startat)
 
@@ -1753,7 +1760,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         
         code_entry = struct.unpack('<I', fin.read(4))[0] # code_entry_address
         fin.seek(0x50 - 4, 1) # reserved
-        chip_name = str(struct.unpack('%ds' % (8), fin.read(8))[0])[2:-1] #отрезает b` `
+        chip_name = str(struct.unpack('8s', fin.read(8))[0])[2:-1] #отрезает b` `
         fin.seek(8, 1) # version = FFFFFFFF
         release_date = str(struct.unpack('8s', fin.read(8))[0])[2:-1] #отрезает b` `
         file_length = struct.unpack('<I', fin.read(4))[0] # in bytes, should be same as in FW_HDR2
@@ -1979,7 +1986,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
     # CKSM - внутри могут быть UBI or BCL1 or ...
     if partfirst4bytes == 0x434B534D:
-        if struct.unpack('>I', fin.read(4))[0] == 0x19070416:
+        if struct.unpack('<I', fin.read(4))[0] == NVTPACK_CHKSUM_HDR_VERSION:
             uiChkMethod = struct.unpack('<I', fin.read(4))[0] # 0 - т.е. CRC16
             uiChkValue = struct.unpack('<I', fin.read(4))[0] # само значение CRC16
             uiDataOffset = struct.unpack('<I', fin.read(4))[0] # стандарно тут 0x40 (64 байта на CKSM заголовок)
@@ -2688,58 +2695,90 @@ def main():
         else:
             print("\033[91mBCL1\033[0m not found")
 
-            # проверим может это файл загрузчика LD9xxxxA.bin
+            # смотрим может это прошивка из несжатых данных (ищем "NT9")
+            # uITRON
+            # can present only if NVTPACK_FW_HDR and NVTPACK_FW_HDR2 is not found (outdate FW)
+            # from start of FW can be "BCL1" or NVTPACK_BININFO_HDR
+            # if first bytes of NVTPACK_BININFO_HDR pBinInfo->BinInfo_1 is "NT9" it means uncompressed data
             fin.seek(0, 0)
-            first2bytes = struct.unpack('>H', fin.read(2))[0] # 28 00
-            if first2bytes == 0x2800:
-                read1 = struct.unpack('>H', fin.read(2))[0]
-                fin.read(2)
-                read2 = struct.unpack('>H', fin.read(2))[0]
-                BCL1_offset = struct.unpack('<I', fin.read(4))[0] # in bootloader - here is a offset to start BCL1 partition
-                constant = struct.unpack('>I', fin.read(4))[0] # always 00 05 80 E0
-                fin.read(2)
-                read3 = struct.unpack('>H', fin.read(2))[0]
-                fin.seek(0x30, 0) # goto 55AA offset
-                read55AA = struct.unpack('>H', fin.read(2))[0] #если тут 55AA то за ним 2 байта CRC
-                if read1 == read2 and read1 == read3 and constant == 0x000580E0 and read55AA == 0x55AA:
-                    # all OK, it is a bootloader probably
-                    print('Input file detects as \033[93mBOOTLOADER\033[0m')
-                    FW_BOOTLOADER = 1
+            code_entry = struct.unpack('<I', fin.read(4))[0] # code_entry_address
+            fin.seek(0x50 - 4, 1) # reserved
+            chip_name = str(struct.unpack('8s', fin.read(8))[0])[2:-1] #отрезает b` `
 
-                    part_startoffset.append(BCL1_offset)
-                    fin.seek(BCL1_offset + 0xC, 0)
-                    part_size.append(struct.unpack('>I', fin.read(4))[0] + 0x10)  # + 0x10 потому что мы будем показывать размер партиции с заголовком а не размер данных внутри BCL1
-                    part_id.append(0)
-                    part_endoffset.append(BCL1_offset + part_size[0])
+            if chip_name[:3] == 'NT9':
+                fin.seek(8, 1) # version = FFFFFFFF or 10000000
+                release_date = str(struct.unpack('8s', fin.read(8))[0])[2:-1] #отрезает b` `
+                file_length = struct.unpack('<I', fin.read(4))[0] # in bytes
+                if (struct.unpack('<H', fin.read(2))[0] == 0xAA55):
+                    read_CRC = struct.unpack('<H', fin.read(2))[0] # считали CRC из смещения 0x6E
+                    CRC = MemCheck_CalcCheckSum16Bit(in_file, 0, file_length, 0x6E) # расчитаем CRC для данных партиции
+                else:
+                    read_CRC = 0 # если признака наличия CRC (0xAA55) не нашли
+                    CRC = 0
 
-                    fin.seek(0x24, 0)
-                    orig_file_size = struct.unpack('<I', fin.read(4))[0] # read proper filesize from header
-                    total_file_size = os.path.getsize(in_file)
-                    print('Bootloader required file size \033[93m{:,}\033[0m bytes'.format(orig_file_size), end='')
-                    if(total_file_size != orig_file_size):
-                        print(', this file size \033[94m{:,}\033[0m bytes'.format(total_file_size))
-                    else:
-                        print(', this file size \033[92m{:,}\033[0m bytes'.format(total_file_size))
+                temp_parttype = 'Raw data \"\033[93m' + chip_name + ' ' + release_date + '\033[0m\"'
+                partitions_count = 1
+                
+                part_startoffset.append(0)
+                part_size.append(file_length)
+                part_id.append(0)
+                part_endoffset.append(part_size[0])
 
-                    # тоже обязательно всегда считать - checksum_value глобальная переменная с CRC всего файла, используется при замене партиций для пересчета CRC всего файла, у загрузчика тоже
-                    fin.seek(0x32, 0)
-                    checksum_value = struct.unpack('<H', fin.read(2))[0] # read CRC as little-endian
-                    # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
-                    if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
-                        CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, orig_file_size, 0x32)
-                        if checksum_value == CRC_FW:
-                            print('Bootloader file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+                part_type.append(temp_parttype)
+                part_crc.append(read_CRC)
+                part_crcCalc.append(CRC)
+            else:
+                # проверим может это файл загрузчика LD9xxxxA.bin
+                fin.seek(0, 0)
+                first2bytes = struct.unpack('>H', fin.read(2))[0] # 28 00
+                if first2bytes == 0x2800:
+                    read1 = struct.unpack('>H', fin.read(2))[0]
+                    fin.read(2)
+                    read2 = struct.unpack('>H', fin.read(2))[0]
+                    BCL1_offset = struct.unpack('<I', fin.read(4))[0] # in bootloader - here is a offset to start BCL1 partition
+                    constant = struct.unpack('>I', fin.read(4))[0] # always 00 05 80 E0
+                    fin.read(2)
+                    read3 = struct.unpack('>H', fin.read(2))[0]
+                    fin.seek(0x30, 0) # goto 55AA offset
+                    read55AA = struct.unpack('>H', fin.read(2))[0] #если тут 55AA то за ним 2 байта CRC
+                    if read1 == read2 and read1 == read3 and constant == 0x000580E0 and read55AA == 0x55AA:
+                        # all OK, it is a bootloader probably
+                        print('Input file detects as \033[93mBOOTLOADER\033[0m')
+                        FW_BOOTLOADER = 1
+
+                        part_startoffset.append(BCL1_offset)
+                        fin.seek(BCL1_offset + 0xC, 0)
+                        part_size.append(struct.unpack('>I', fin.read(4))[0] + 0x10)  # + 0x10 потому что мы будем показывать размер партиции с заголовком а не размер данных внутри BCL1
+                        part_id.append(0)
+                        part_endoffset.append(BCL1_offset + part_size[0])
+
+                        fin.seek(0x24, 0)
+                        orig_file_size = struct.unpack('<I', fin.read(4))[0] # read proper filesize from header
+                        total_file_size = os.path.getsize(in_file)
+                        print('Bootloader required file size \033[93m{:,}\033[0m bytes'.format(orig_file_size), end='')
+                        if(total_file_size != orig_file_size):
+                            print(', this file size \033[94m{:,}\033[0m bytes'.format(total_file_size))
                         else:
-                            print('Bootloader file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m' % (checksum_value, CRC_FW))
+                            print(', this file size \033[92m{:,}\033[0m bytes'.format(total_file_size))
 
-                    bootpart, somecrc = GetPartitionInfo(BCL1_offset, part_size[0], 0, 1)
-                    if bootpart != '':
-                        partitions_count = 1 # значит у нас только 1 партиция - BCL1 (а у загрузчика так и есть всегда)
+                        # тоже обязательно всегда считать - checksum_value глобальная переменная с CRC всего файла, используется при замене партиций для пересчета CRC всего файла, у загрузчика тоже
+                        fin.seek(0x32, 0)
+                        checksum_value = struct.unpack('<H', fin.read(2))[0] # read CRC as little-endian
+                        # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
+                        if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
+                            CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, 0, orig_file_size, 0x32)
+                            if checksum_value == CRC_FW:
+                                print('Bootloader file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+                            else:
+                                print('Bootloader file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m' % (checksum_value, CRC_FW))
+
+                        bootpart, somecrc = GetPartitionInfo(BCL1_offset, part_size[0], 0, 1)
+                        if bootpart != '':
+                            partitions_count = 1 # значит у нас только 1 партиция - BCL1 (а у загрузчика так и есть всегда)
+                    else:
+                        exit(0) # ничего не найдено
                 else:
                     exit(0) # ничего не найдено
-            else:
-                exit(0) # ничего не найдено
-
 
 
     if FW_HDR2 == 1:
@@ -2747,7 +2786,7 @@ def main():
             print("\033[93mNVTPACK_FW_HDR2\033[0m found")
 
         # NVTPACK_FW_HDR2_VERSION check
-        if struct.unpack('<I', fin.read(4))[0] == 0x16071515:
+        if struct.unpack('<I', fin.read(4))[0] == NVTPACK_FW_HDR2_VERSION:
             if is_silent != 1:
                 print("\033[93mNVTPACK_FW_HDR2_VERSION\033[0m found")
         else:
@@ -3013,6 +3052,14 @@ def main():
                         fin.write(struct.pack('<H', part_crcCalc[a]))
                         fin.close()
                         part_type[a] += ', \033[94mCRC fixed\033[0m'
+                # fix CRC for Raw data partition
+                if part_type[a][:8] == 'Raw data':
+                    fin = open(in_file, 'r+b')
+                    fin.seek(part_startoffset[a] + 0x6E, 0)
+                    fin.write(struct.pack('<H', part_crcCalc[a]))
+                    fin.close()
+                    part_type[a] += ', \033[94mCRC fixed\033[0m'
+
 
         # fix CRC for whole file
         if FW_HDR2 == 1:
@@ -3073,7 +3120,7 @@ def main():
                     curr_partition_name = dtbpart_name[part_id[a]]
                 else:
                     curr_partition_name = ''
-                print("  %3i    %-15s  0x%08X - 0x%08X     %+11s     0x%04X     \033[%s0x%04X\033[0m     %s" % (part_id[a], curr_partition_name, part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], color, part_crcCalc[a], part_type[a]))
+                print("  %3i   %-15s  0x%08X - 0x%08X     %+11s     0x%04X     \033[%s0x%04X\033[0m     %s" % (part_id[a], curr_partition_name, part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], color, part_crcCalc[a], part_type[a]))
             print(" ----------------------------------------------------------------------------------------------------------------------")
         # если dtb нет - то информацию без имен партиций
         else:
@@ -3085,7 +3132,7 @@ def main():
                     color = '92m' # green
                 else:
                     color = '91m' # red
-                print("  %3i     0x%08X - 0x%08X     %+11s     0x%04X     \033[%s0x%04X\033[0m     %s" % (part_id[a], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], color, part_crcCalc[a], part_type[a]))
+                print("  %3i    0x%08X - 0x%08X     %+11s     0x%04X     \033[%s0x%04X\033[0m     %s" % (part_id[a], part_startoffset[a], part_endoffset[a], '{:,}'.format(part_size[a]), part_crc[a], color, part_crcCalc[a], part_type[a]))
             print(" ----------------------------------------------------------------------------------------------------------------------")
 
 
