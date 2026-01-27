@@ -56,7 +56,7 @@
 # V7.0 - Add -add command: now you may add a new partitions extracted via -x cmd from other firmware file. At this moment works only with NVTPACK_FW_HDR2 firmwares. Fix -r command when it uses with offset != 64 and CKSM partitions.
 # V7.1 - NVTPACK_FW_HDR firmwares is also supported for -add command. Fix code to add a new partition as last partition. Fix bug then no more than 2 partitions could be recognized in NVTPACK_FW_HDR firmware files (never seen such FWs yet but improve code).
 # V7.2 - Raw data partition support was added. It is for really old firmwares that does not have any headers and only 1 raw data partition with CRC (detects via "NT9" text in BinInfo1). No need to uncompress, edit file and do -fixCRC
-# V7.3 - "-delete" command was implemented for remove partition.
+# V7.3 - "-delete" command was implemented for remove partition. Now partition filename for "-add" command is optional (will use input filename + "-partitionID*" if not defined). It is also respect working dir if use with "-o" option.
 
 
 CURRENT_VERSION = '7.3'
@@ -223,7 +223,7 @@ def ShowInfoBanner():
     print("")
     print(" Copyright © 2026 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
     print(" If you like this project or use it with commercial purposes please donate some")
-    print(" \033[93mBTC\033[0m to: \033[92m12q5kucN1nvWq4gn5V3WJ8LFS6mtxbymdj\033[0m")
+    print(" \033[93mBTC\033[0m to: \033[92m12q5kucN1nvWq4gn5V3WJ8LFS6mtxbymdj\033[0m   \033[93mPayPal\033[0m to: \033[92mhttps://paypal.me/egorkindv\033[0m")
     print("=====================================================================================")
 
 
@@ -240,7 +240,7 @@ def get_args():
     p = argparse.ArgumentParser(add_help=True, description='')
     p.add_argument('-i',metavar='filename', nargs=1, help='input file')
     p.add_argument('-x',metavar=('partID', 'offset'), nargs='+', help='extract partition by ID with optional start offset or all partitions if partID set to \"ALL\"')
-    p.add_argument('-add',metavar=('partID', 'filename'), nargs=2, help='add partition with a new ID from file and fixCRC')
+    p.add_argument('-add',metavar=('partID', 'filename'), nargs='+', help='add partition with a new ID from file and fixCRC. U may optionally redefine partition filename')
     p.add_argument('-delete',metavar=('partID'), type=int, nargs=1, help='delete partition by ID and fixCRC')
     p.add_argument('-r',metavar=('partID', 'offset', 'filename'), nargs=3, help='replace partition by ID with start offset using input file')
     p.add_argument('-u',metavar=('partID', 'offset'), type=int, nargs='+', help='uncompress partition by ID with optional start offset')
@@ -287,12 +287,11 @@ def get_args():
 
     if args.add:
         is_add = int(args.add[0])
-        is_add_file = str(args.add[1])
-        # если хотим добавить партицию проверим сначала что файл с новой партицией существует
-        if(is_add != -1):
-            if not os.path.isfile(is_add_file):
-                print('\033[91m%s file does not found, exit\033[0m' % is_add_file)
-                exit(0)
+        # если задан 2ой аргумент - filename
+        if len(args.add) == 2:
+            is_add_file = str(args.add[1])
+        else:
+            is_add_file = ''
     else:
         is_add = -1
         is_add_file = ''
@@ -2114,6 +2113,12 @@ def partition_extract(is_extract, is_extract_offset):
         fin = open(in_file, 'r+b')
         fin.seek(part_startoffset[part_nr] + is_extract_offset, 0)
         finread = fin.read(part_size[part_nr] - is_extract_offset) # извлекаем только данные партиции без padding и 0000... в конце
+        '''# для корректного -add (возвращения партиций) после их удаления через -delete и получения файла 1 в 1 как был извлекаем теперь все данные от начала партиции до начала следующей партиции или конца файла для последней партиции
+        # но тут косяк в другом - размер возвращаемой партиции указан больше чем был т.к. нельзя понять(разве что парсить данные но мы может и без заголовка данные наверное брать) где партиция кончилась и начались паддинг и просто 0000... в конце
+        if a == partitions_count - 1: # посл. партиция
+            finread = fin.read(os.path.getsize(in_file) - part_startoffset[part_nr] - is_extract_offset)
+        else:
+            finread = fin.read(part_startoffset[part_nr + 1] - part_startoffset[part_nr] - is_extract_offset)'''
         fin.close()
 
         fpartout = open(out_file, 'w+b')
@@ -2139,11 +2144,10 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
             break
     
     if part_nr != -1:
-        # если добавляем или заменяем партицию то проверим что файл существует
-        if is_add != -1 or is_replace != -1:
-            if not os.path.isfile(is_replace_file):
-                print('\033[91m%s file does not found, exit\033[0m' % is_replace_file)
-                exit(0)
+        # проверим что файл существует
+        if not os.path.isfile(is_replace_file):
+            print('\033[91m%s file does not found, exit\033[0m' % is_replace_file)
+            exit(0)
     
         if is_silent != 1:
             if is_add != -1:
@@ -2152,7 +2156,7 @@ def partition_replace(is_replace, is_replace_offset, is_replace_file):
                 print('Replace ', end='') # если заменяем партицию
             print('partition ID %i at 0x%08X ' % (is_replace, part_startoffset[part_nr]), end='')
             if is_replace_offset != 0: print('+ 0x%08X ' % is_replace_offset, end='')
-            print('using inputfile \033[93m%s\033[0m' % is_replace_file) # for -add and -r
+            print('using inputfile \033[93m%s\033[0m' % is_replace_file)
         
         # read new partition data from file
         freplace = open(is_replace_file, 'rb')
@@ -2593,7 +2597,7 @@ def main():
                 print('Firmware file size \033[93m{:,}\033[0m bytes'.format(total_file_size))
 
                 # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
-                if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
+                if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1 & is_add == -1 & is_del == -1):
                     CRC_FW = MemCheck_CalcCheckSum16Bit(in_file, part_size[0], NVTPACK_FW_HDR_AND_PARTITIONS_size, 0x14)
                     if checksum_value == CRC_FW:
                         print('NVTPACK_FW_HDR + Partitions table ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
@@ -2602,6 +2606,20 @@ def main():
 
                 # read partitions table info
                 fin.seek(part_size[0] + 0x1C, 0) # 0x1C - это NVTPACK_FW_HDR + 3*4 байта (NVTPACK_FW_HDR_AND_PARTITIONS_size, checksum_value, partitions_count)
+
+
+                # если хотим добавить партицию проверим сначала что файл с новой партицией существует
+                if is_add != -1:
+                    # если имя файла для данных новой партиции не переопределено в параметрах запуска то используем стандартное имя для извлекаемых партиций через "-x"
+                    if is_add_file == '':
+                        if workdir != '':
+                            is_add_file = workdir + '/' + in_file + '-partitionID' + str(is_add)
+                        else:
+                            is_add_file = in_file + '-partitionID' + str(is_add)
+                    
+                    if not os.path.isfile(is_add_file):
+                        print('\033[91m%s file does not found, exit\033[0m' % is_add_file)
+                        exit(0)
 
 
                 is_new_part_added = 0
@@ -2882,6 +2900,20 @@ def main():
 
         # read partitions table info
         fin.seek(NVTPACK_FW_HDR2_size, 0)
+
+
+        # если хотим добавить партицию проверим сначала что файл с новой партицией существует
+        if is_add != -1:
+            # если имя файла для данных новой партиции не переопределено в параметрах запуска то используем стандартное имя для извлекаемых партиций через "-x"
+            if is_add_file == '':
+                if workdir != '':
+                    is_add_file = workdir + '/' + in_file + '-partitionID' + str(is_add)
+                else:
+                    is_add_file = in_file + '-partitionID' + str(is_add)
+            
+            if not os.path.isfile(is_add_file):
+                print('\033[91m%s file does not found, exit\033[0m' % is_add_file)
+                exit(0)
 
 
         is_new_part_added = 0
