@@ -2681,7 +2681,10 @@ def main():
             # перезапишем файл с новой таблицей партиций изменив смещения партиций на -12 байт(размер удалённой записи)
             if is_del != -1:
                 if is_part_deleted == 0:
-                    print('\033[91mPartititon with ID=%i is not found\033[0m' % (is_del))
+                    if is_del == 0: # для FW_HDR = 1 мы не можем удалять 0 партицию т.к. вся структура таких прошивок это BCL1 + NVTPACK_FW_HDR partititon table
+                        print('\033[91mDenied to delete 0 partition in NVTPACK_FW_HDR firmwares\033[0m')
+                    else:
+                        print('\033[91mPartititon with ID=%i is not found\033[0m' % (is_del))
                     fin.close()
                     exit(0)
                 else:
