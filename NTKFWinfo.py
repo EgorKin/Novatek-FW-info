@@ -61,6 +61,7 @@
 
 CURRENT_VERSION = '7.3'
 
+from genericpath import samefile
 import os, struct, sys, argparse, array
 from datetime import datetime, timezone
 import zlib
@@ -1749,10 +1750,16 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
     # uboot
     # if partID == 3: # ранее всегда 3 партиция - это uboot
-    if len(dtbpart_name) > partID and str(dtbpart_name[partID]).lower() == 'uboot':
+    # теперь либо по имени партиции либо чтобы 7 INT были одинаковы в начале
+    # ещё есть на 0x3C смещении 0xDEADBEEF
+    samebytes = struct.unpack('>7I', fin.read(4*7)) # все = 0x14F09FE5 или 0x18F09FE5
+    fin.seek(0x1C, 1)
+    deadbytes = struct.unpack('<I', fin.read(4))[0] # 0xDEADBEEF но в старых прошивках нет
+    dec0bytes = struct.unpack('>I', fin.read(4))[0] # 0xDEC0AD0B вроде везде есть
+    if (len(dtbpart_name) > partID and str(dtbpart_name[partID]).lower() == 'uboot') or (samebytes[0] == samebytes[1] == samebytes[2] == samebytes[3] == samebytes[4] == samebytes[5] == samebytes[6] and dec0bytes == 0xDEC0AD0B):
         temp_parttype = 'uboot'
         # в uboot партиции пропускаем первые 0x300 байт - пока что так
-        fin.seek(0x300 - 4, 1) # 4 байта считали ранее как partfirst4bytes
+        fin.seek(start_offset + 0x300, 0)
         
         # попадаем на начало структуры HEADINFO или по другому NVTPACK_BININFO_HDR:
         # typedef struct _NVTPACK_BININFO_HDR {
@@ -1792,6 +1799,8 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
             part_crcCalc.append(CRC)
             fin.close()
         return temp_parttype, CRC
+    else:
+        fin.seek(start_offset + 4, 0) # seek back to file position right after partfirst4bytes was read
 
 
     # uImage header
@@ -2027,6 +2036,8 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
                 part_crcCalc.append(CRC)
                 fin.close()
             return temp_parttype, CRC
+        else:
+            fin.seek(-4, 1) # seek back
 
 
     # check is this a MODELEXT header and MODELEXT info
