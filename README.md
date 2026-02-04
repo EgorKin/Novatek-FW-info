@@ -1,5 +1,5 @@
 # Novatek Firmware info (NTKFWinfo)
-Python script for work with Novatek firmware update files from manufacturers (like FWA***.bin). Show full FW info, allow extract, replace, uncompress, compress partitions, fix CRC for modded partitions and whole firmware file. Useful tool for building custom firmwares.
+Python script for working with Novatek firmware update files from manufacturers (like FWA***.bin). Show full FW info, allow extract, add, delete, replace, uncompress and compress partitions back, fix CRC for modded partitions and whole firmware file. Useful tool for building custom firmwares.
 Use Linux environment or WSL2 (Windows Subsystem for Linux) for properly work with UBI and SPARSE partitions.
 
 Novatek FW info is available under the terms of the GNU Public License version 3.
@@ -12,7 +12,7 @@ If this project helps you, you can send me any amount of BTC to address ***12q5k
 
 
 
-![Безымянный](https://user-images.githubusercontent.com/4955678/184808463-1b5d62b6-eb76-41d9-a75a-dbd019e8f60f.png)
+![Безымянный](https://github.com/user-attachments/assets/d5bb4816-9775-48ab-a422-d92f0ce3761f)
 ![NTKFWinfo2](https://user-images.githubusercontent.com/4955678/188560457-54a2b532-61db-4ca8-9b3c-c4916cae1c62.png)
 
 
@@ -54,16 +54,25 @@ python3 ./NTKFWinfo.py -i FWA229A.bin -c 6
 ```
 
 ## Additional(expert) commands:
-### Extract partition by ID number and skip n start bytes:
-(as example extract data from CKSM partition require skip first 64 CKSM-header bytes)
+### Extract partition by ID number and skip n start bytes(optionally):
+(as example extract data from CKSM partition and skip first 64 CKSM-header bytes)
 ```
 python3 ./NTKFWinfo.py -i FWA229A.bin -x 6 64
+```
+### Add a new partition with new ID=6 using file FWA229A.bin-partitionID6 (filename is optionally, if not defined will be used input filename appended with '-partitionID6'):
+```
+python3 ./NTKFWinfo.py -i FWA229A.bin -add 6 ./FWA229A.bin-partitionID6
+```
+Take a note that partition name, memory offset and size for a new partition ID will be used from fdt partition (if it is exist in FW). If it is not presented in fdt - new partition can't be flash to memory. You need to modify fdt partition manually in that case.
+### Delete existing partition with ID=6 from input file:
+```
+python3 ./NTKFWinfo.py -i FWA229A.bin -delete 6
 ```
 ### Replace partition with ID=6 and start offset = 64 (CKSM-header size) using file img-726660551.ubi:
 ```
 python3 ./NTKFWinfo.py -i FWA229A.bin -r 6 64 ./img-726660551.ubi
 ```
-### Fix CRC for all known partitions(uboot, MODELEXT INFO, BCL1, CKSM) and whole firmware file:
+### Fix CRC for all known partitions(uboot, MODELEXT, BCL1, CKSM) and whole firmware file:
 ```
 python3 ./NTKFWinfo.py -i FWA229A.bin -fixCRC
 ```
