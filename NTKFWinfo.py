@@ -57,9 +57,9 @@
 # V7.1 - NVTPACK_FW_HDR firmwares is also supported for -add command. Fix code to add a new partition as last partition. Fix bug then no more than 2 partitions could be recognized in NVTPACK_FW_HDR firmware files (never seen such FWs yet but improve code).
 # V7.2 - Raw data partition support was added. It is for really old firmwares that does not have any headers and only 1 raw data partition with CRC (detects via "NT9" text in BinInfo1). No need to uncompress, edit file and do -fixCRC
 # V7.3 - "-delete" command was implemented for remove partition. Now partition filename for "-add" command is optional (will use input filename + "-partitionID*" if not defined). It is also respect working dir if use with "-o" option.
+# V7.4 - 'Master Boot Record' partitions is detected now and number of partition records in it is displayed
 
-
-CURRENT_VERSION = '7.3'
+CURRENT_VERSION = '7.4'
 
 from genericpath import samefile
 import os, struct, sys, argparse, array
@@ -219,11 +219,12 @@ compressAlgoTypes = {
 
 def ShowInfoBanner():
     print("=====================================================================================")
-    print(" \033[92mNTKFWinfo\033[0m - python script for work with Novatek firmware binary files. Ver. %s" % (CURRENT_VERSION))
-    print(" Show full FW \033[93mi\033[0mnfo, allow e\033[93mx\033[0mtract/\033[93madd\033[0m/\033[93mr\033[0meplace/\033[93mu\033[0mncompress/\033[93mc\033[0mompress partitions, \033[93mfixCRC\033[0m")
+    print(" \033[92mNTKFWinfo\033[0m - python script for working with Novatek firmware binary files. Ver. \033[92m%s\033[0m" % (CURRENT_VERSION))
+    print(" Show full FW \033[93mi\033[0mnfo, allow e\033[93mx\033[0mtract/\033[93madd\033[0m/\033[93mdelete\033[0m/\033[93mr\033[0meplace/\033[93mu\033[0mncompress/\033[93mc\033[0mompress partitions")
+    print(" and \033[93mfixCRC\033[0m after modifications.")
     print("")
     print(" Copyright © 2026 \033[93mDex9999\033[0m(4pda.to) aka \033[93mDex\033[0m aka \033[93mEgorKin\033[0m(GitHub, etc.)")
-    print(" If you like this project or use it with commercial purposes please donate some")
+    print(" If you like this project or use it with any commercial purposes please donate")
     print(" \033[93mBTC\033[0m to: \033[92m12q5kucN1nvWq4gn5V3WJ8LFS6mtxbymdj\033[0m   \033[93mPayPal\033[0m to: \033[92mhttps://paypal.me/egorkindv\033[0m")
     print("=====================================================================================")
 
@@ -1746,6 +1747,52 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
                 part_crcCalc.append(CRC)
                 fin.close()
         return temp_parttype, CRC
+
+
+    # Master Boot Record
+    # defined by: 512 bytes size, 0x55AA at 0x1FE-0x1FF and at 0x1BC-0x1BD -> 0x0000 or 0x5A5A
+    # 0x0 -0x1B7 ->MBR code area (440 bytes)
+    # 0x1B8-0x1BB ->32-bit disk signature (optional 4 bytes)
+    # 0x1BC-0X1BD -> 0x0000 or 0x5A5A (2 bytes)
+    # 0x1BE-0x1FD -> Table of primary partitions (4*16 bytes)
+    # 0x1FE-0x1FF -> MBR signature 0X55AA (2 bytes)
+    #if len(dtbpart_name) > partID and str(dtbpart_name[partID]).lower()[:3] == 'mbr': # а для 0 партиции не будет имени т.к. fdt партиция идёт ниже и пока она еще не распарсилась и не получили имена партиций
+    if part_size == 512:
+        fin.seek(0x1FE - 4, 1)
+        mbrsigbytes = struct.unpack('>H', fin.read(2))[0]
+        fin.seek(-0x44, 1) # seek back to 0x1BC offset
+        twobytes = struct.unpack('>H', fin.read(2))[0]
+        if (twobytes == 0x0000 or twobytes == 0x5A5A) and (mbrsigbytes == 0x55AA):
+            temp_parttype = 'MBR'
+            CRC = 0
+
+            # read info from MBR partition table (4 records, 16 bytes each, Little-endian)
+            # 0x0 - Bootable flag (0x80 - bootable | 0x00 - non-bootable | 0x01-0x07 - Invalid)
+            # 0x01-0x03 - CHS address of the starting of partition in hard disk
+            # 0x04 - Partition type (0x83 - Linux, 0x05 - Extended, ...)
+            # 0x05-0x07 - CHS address of the end of partition in hard disk
+            # 0x08-0x0B - LBA of first sector in the partition
+            # 0x0C-0x0F - Number of sectors in partition
+            MBR_partitions = 0
+            for n in range(4):
+                if fin.read(16) != b'\x00'*16: # если 16 байт не нулевые то есть инфо о партиции
+                    MBR_partitions += 1
+
+            if MBR_partitions > 0:
+                temp_parttype += ' with ' + str(MBR_partitions)
+                if MBR_partitions == 1:
+                    temp_parttype += ' record'
+                else:
+                    temp_parttype += ' records'
+
+            if addinfo:
+                part_type.append(temp_parttype)
+                part_crc.append(0)
+                part_crcCalc.append(CRC)
+                fin.close()
+            return temp_parttype, CRC
+        else:
+            fin.seek(start_offset + 4, 0) # seek back to file position right after partfirst4bytes was read
 
 
     # uboot
