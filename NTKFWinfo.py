@@ -363,7 +363,7 @@ def get_args():
 
 def MemCheck_CalcCheckSum16Bit(input_file, in_offset, uiLen, ignoreCRCoffset):
     uiSum = 0
-    pos = 0
+    #pos = 0
     num_words = uiLen // 2
 
     with open(input_file, "rb") as f:
@@ -374,14 +374,17 @@ def MemCheck_CalcCheckSum16Bit(input_file, in_offset, uiLen, ignoreCRCoffset):
             fread.byteswap() # fromfile() uses system byte order, if it is not LE as we need - swapbytes
         fread[ignoreCRCoffset // 2] = 0 # игнорим 2 байта по которым лежит Checksum
 
-    #читаем по 2 байта в little endian
-    for chunk in fread:
-        uiSum += chunk + pos
-        pos += 1
+    # читаем по 2 байта в little endian
+    #for chunk in fread:
+    #    uiSum += chunk #+ pos
+        #pos += 1
         #print('read=0x%04X' % chunk)
         #print('pos=%i' % pos)
         #print('or 0x%08X' % struct.unpack('>H', read)[0])
         #print('CRC=0x%08X' % uiSum)
+    
+    uiSum = sum(fread) # sum of all read chunks
+    uiSum += (num_words-1)*num_words//2 # this replaced (+ pos++) in for cycle
 
     #print('CRC=0x%08X' % uiSum)
     uiSum = uiSum & 0xFFFF
@@ -3349,8 +3352,8 @@ def main():
 
 
 if __name__ == "__main__":
-    #startT = datetime.now()
+    #startTime = datetime.now()
     main()
-    #endT = datetime.now()
-    #print("elapsed: %s" % str(endT - startT))
+    #endTime = datetime.now()
+    #print("elapsed: %s" % str(endTime - startTime))
 
