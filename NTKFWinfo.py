@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
 # =====================================================================================
-# NTKFWinfo - python script for work with Novatek firmware binary files
-# Show full FW info, allow extract/add/replace/uncompress/compress partitions, fix CRC
+# NTKFWinfo - python script for working with Novatek firmware binary files
+# Show full FW info, allow extract/add/delete/replace/uncompress/compress partitions
+# and fixCRC after modifications.
 #
 # Copyright © 2026 Dex9999(4pda.to) aka Dex aka EgorKin(GitHub, etc.)
 # =====================================================================================
@@ -58,8 +59,9 @@
 # V7.2 - Raw data partition support was added. It is for really old firmwares that does not have any headers and only 1 raw data partition with CRC (detects via "NT9" text in BinInfo1). No need to uncompress, edit file and do -fixCRC
 # V7.3 - "-delete" command was implemented for remove partition. Now partition filename for "-add" command is optional (will use input filename + "-partitionID*" if not defined). It is also respect working dir if use with "-o" option.
 # V7.4 - 'Master Boot Record' partitions is detected now and number of partition records in it is displayed
+# V7.5 - Speed up code of checksums calculation in MemCheck_CalcCheckSum16Bit()
 
-CURRENT_VERSION = '7.4'
+CURRENT_VERSION = '7.5'
 
 from genericpath import samefile
 import os, struct, sys, argparse, array
@@ -363,25 +365,24 @@ def MemCheck_CalcCheckSum16Bit(input_file, in_offset, uiLen, ignoreCRCoffset):
     uiSum = 0
     pos = 0
     num_words = uiLen // 2
-    
-    fin = open(input_file, 'rb')
-    fin.seek(in_offset, 0)
-    fread = fin.read(uiLen)
-    fin.close()
+
+    with open(input_file, "rb") as f:
+        f.seek(in_offset, 0)
+        fread = array.array('h') # Читаем файл в массив знаковых 16-битных целых
+        fread.fromfile(f, num_words)
+        if sys.byteorder > 'little':
+            fread.byteswap() # fromfile() uses system byte order, if it is not LE as we need - swapbytes
+        fread[ignoreCRCoffset // 2] = 0 # игнорим 2 байта по которым лежит Checksum
 
     #читаем по 2 байта в little endian
-    for chunk in struct.unpack("<%sH" % num_words, fread[0:num_words*2]):
-        if pos*2 != ignoreCRCoffset:
-            uiSum += chunk + pos
-        else:
-            uiSum += pos
-        pos+=1
+    for chunk in fread:
+        uiSum += chunk + pos
+        pos += 1
         #print('read=0x%04X' % chunk)
         #print('pos=%i' % pos)
         #print('or 0x%08X' % struct.unpack('>H', read)[0])
         #print('CRC=0x%08X' % uiSum)
-        
-    
+
     #print('CRC=0x%08X' % uiSum)
     uiSum = uiSum & 0xFFFF
     uiSum = (~uiSum & 0xFFFF) + 1
@@ -2641,7 +2642,9 @@ def main():
                                         FW_HDR = 1
             if FW_HDR == 0:
                 print("\033[91mNVTPACK_FW_HDR\033[0m not found")
-                partitions_count = 1 # раз нет NVTPACK_FW_HDR значит у нас только 1 партиция - BCL1
+                partitions_count = 1 # раз нет NVTPACK_FW_HDR значит у нас только 1 партиция - 
+                if is_silent != 1:
+                    print("\033[93mBCL1\033[0m found") # есть только BCL1 партиция
             else:
                 if is_silent != 1:
                     print("\033[93mNVTPACK_FW_HDR\033[0m found")
@@ -2840,6 +2843,9 @@ def main():
                 fixCRC(is_add)
                 exit(0)
         else:
+            # просто покажем что FW_HDR мы тоже искали но не нашли
+            if FW_HDR == 0:
+                print("\033[91mNVTPACK_FW_HDR\033[0m not found")
             print("\033[91mBCL1\033[0m not found")
 
             # смотрим может это прошивка из несжатых данных (ищем "NT9")
@@ -3343,4 +3349,8 @@ def main():
 
 
 if __name__ == "__main__":
+    #startT = datetime.now()
     main()
+    #endT = datetime.now()
+    #print("elapsed: %s" % str(endT - startT))
+
