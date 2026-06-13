@@ -30,13 +30,17 @@ sudo apt-get install pypy3
 sudo pip3 install python-lzo
 sudo pip3 install ubi_reader
 ```
+**For FDT(DTB) partitions support install:**
+```
+sudo apt-get install device-tree-compiler
+```
 **For SPARSE partitions support install:**
 ```
 sudo apt-get install android-sdk-libsparse-utils
 ```
-**For FDT(DTB) partitions support install:**
+**For SquashFS partitions support install:**
 ```
-sudo apt-get install device-tree-compiler
+sudo apt-get install squashfs-tools
 ```
 ## Basic usage:
 
