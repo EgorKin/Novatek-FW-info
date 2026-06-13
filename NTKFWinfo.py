@@ -60,8 +60,9 @@
 # V7.3 - "-delete" command was implemented for remove partition. Now partition filename for "-add" command is optional (will use input filename + "-partitionID*" if not defined). It is also respect working dir if use with "-o" option.
 # V7.4 - 'Master Boot Record' partitions is detected now and number of partition records in it is displayed
 # V7.5 - Speed up code of checksums calculation in MemCheck_CalcCheckSum16Bit()
+# V7.6 - add SquashFS partitions uncompress/compress support
 
-CURRENT_VERSION = '7.5'
+CURRENT_VERSION = '7.6'
 
 from genericpath import samefile
 import os, struct, sys, argparse, array
@@ -581,6 +582,72 @@ def compress_CKSM_SPARSE(part_nr, in2_file):
 
 
 
+def compress_CKSM_SquashFS(part_nr, in2_file):
+    global in_file
+
+    fin = open(in_file, 'rb')
+    fin.seek(part_startoffset[part_nr], 0)
+    FourCC = fin.read(4)
+
+    if FourCC != b'CKSM':
+        print('\033[91mNot CKSM partition, exit\033[0m')
+        exit(0)
+
+    # skip CKSM header
+    fin.seek(part_startoffset[part_nr] + 0x40, 0)
+
+    FourCC = fin.read(4)
+    if struct.unpack('>I', FourCC)[0] != 0x73717368 and struct.unpack('>I', FourCC)[0] != 0x68737173:
+        print('\033[91mNot SquashFS into CKSM partition, exit\033[0m')
+        exit(0)
+
+    # для SquashFS на вход должна подаваться папка партиции, а не файл
+    if not os.path.exists(in2_file + '/mount'):
+        print('\033[91m%s folder does not found, exit\033[0m' % in2_file + '/mount')
+        exit(0)
+
+    # read SquashFS compression algo
+    fin.seek(4, 1)
+    modificationTime = struct.unpack('<I', fin.read(4))[0]
+    fin.seek(8, 1)
+    compressionID = struct.unpack('<H', fin.read(2))[0]
+    if compressionID == 1:
+        squashfs_comp_algo = 'gzip'
+    if compressionID == 2:
+        squashfs_comp_algo = 'lzma'
+    if compressionID == 3:
+        squashfs_comp_algo = 'lzo'
+    if compressionID == 4:
+        squashfs_comp_algo = 'xz'
+    if compressionID == 5:
+        squashfs_comp_algo = 'lz4'
+    if compressionID == 6:
+        squashfs_comp_algo = 'zstd'
+
+    if (compressionID < 1 or compressionID > 6):
+        print('\033[91m%s comp algo for squashfs is unknown, exit\033[0m' % compressionID)
+        exit(0)
+
+    # umount - it is mean that we updates tempfile.ext4 file depend on current /mount folder
+    subprocess.run('sudo mksquashfs ' + '\"' + in2_file + '/mount' + '\"' + ' ' + '\"' + in2_file + '/tempfile' + '\"' + ' -comp ' + squashfs_comp_algo + ' -mkfs-time ' + str(modificationTime) + ' -quiet -no-progress', shell=True)
+
+    # hide output print
+    global is_silent
+    is_silent = 1
+
+    # replace partition
+    partition_replace(part_id[part_nr], 0x40, in2_file + '/tempfile')
+
+    # удалим всю директорию
+    # delete tempfile & tempfile.ext4 & tempSquashFSfile
+    os.system('rm -rf ' + '\"' + in2_file + '\"')
+
+    # fix CRC
+    is_silent = -1
+    fixCRC(part_id[part_nr])
+
+
+
 def compress_BCL(part_nr, in2_file):
     global in_file
     global FW_BOOTLOADER
@@ -806,6 +873,12 @@ def compress(part_nr, in2_file):
         if struct.unpack('>I', FourCC)[0] == 0x3AFF26ED:
             fin.close()
             compress_CKSM_SPARSE(part_nr, in2_file)
+            return
+
+        # CKSM<--SquashFS image
+        if struct.unpack('>I', FourCC)[0] == 0x73717368 or struct.unpack('>I', FourCC)[0] == 0x68737173:
+            fin.close()
+            compress_CKSM_SquashFS(part_nr, in2_file)
             return
     else:
         # BCL1
@@ -1328,6 +1401,7 @@ def uncompress(in_offset, out_filename, size):
     # SPARSE EXT4
     if struct.unpack('>I', FourCC)[0] == 0x3AFF26ED:
         #create dir with similar name as for other parttition types
+        subprocess.run('umount -q -d -f ' + '\"' + out_filename + '/mount' + '\"', shell=True)
         os.system('rm -rf ' + '\"' + out_filename + '\"')
         os.system('mkdir ' + '\"' + out_filename + '\"')
         os.system('mkdir ' + '\"' + out_filename + '/mount' + '\"') # subdir for mounting ext4
@@ -1349,7 +1423,29 @@ def uncompress(in_offset, out_filename, size):
         # удалим tempfile, tempfile.ext4 нам еще нужен будет для сборки обратно
         os.system('rm -rf ' + '\"' + out_filename + '/tempfile' + '\"')
         return
-    
+
+    # SquashFS
+    if struct.unpack('>I', FourCC)[0] == 0x73717368 or struct.unpack('>I', FourCC)[0] == 0x68737173:
+        #create dir with similar name as for other parttition types
+        os.system('rm -rf ' + '\"' + out_filename + '\"')
+        os.system('mkdir ' + '\"' + out_filename + '\"')
+        os.system('mkdir ' + '\"' + out_filename + '/mount' + '\"') # subdir for mounting squashfs
+
+        #extract partition to tempfile
+        fin.seek(in_offset, 0)
+        finread = fin.read(size)
+        fin.close()
+        fpartout = open(out_filename + '/tempfile', 'w+b')
+        fpartout.write(finread)
+        fpartout.close()
+
+        # unpack squashfs to folder
+        os.system('sudo unsquashfs -q -n -f -d ' + '\"' + out_filename + '/mount' + '\"' + ' ' + '\"' + out_filename + '/tempfile' + '\"')
+
+        # удаляем tempfile
+        os.system('rm -rf ' + '\"' + out_filename + '/tempfile' + '\"')
+        return
+
     # MODELEXT
     MODELEXT_SIZE = struct.unpack('<I', FourCC)[0]
     MODELEXT_TYPE = struct.unpack('<I', fin.read(4))[0]
@@ -1393,7 +1489,7 @@ def uncompress(in_offset, out_filename, size):
             data = fin.read(MODELEXT_SIZE - 16) # -16 bytes of header
         return
 
-    print("\033[91mOnly FDT(DTB), BCL1, UBI, SPARSE and MODELEXT partitions is supported now, exit\033[0m")
+    print("\033[91mOnly FDT(DTB), BCL1, UBI, SPARSE, SquashFS and MODELEXT partitions is supported now, exit\033[0m")
     fin.close()
 
 
@@ -1799,61 +1895,6 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
             fin.seek(start_offset + 4, 0) # seek back to file position right after partfirst4bytes was read
 
 
-    # uboot
-    # if partID == 3: # ранее всегда 3 партиция - это uboot
-    # теперь либо по имени партиции либо чтобы 7 INT были одинаковы в начале
-    # ещё есть на 0x3C смещении 0xDEADBEEF
-    samebytes = struct.unpack('>7I', fin.read(4*7)) # все = 0x14F09FE5 или 0x18F09FE5
-    fin.seek(0x1C, 1)
-    deadbytes = struct.unpack('<I', fin.read(4))[0] # 0xDEADBEEF но в старых прошивках нет
-    dec0bytes = struct.unpack('>I', fin.read(4))[0] # 0xDEC0AD0B вроде везде есть
-    if (len(dtbpart_name) > partID and str(dtbpart_name[partID]).lower() == 'uboot') or (samebytes[0] == samebytes[1] == samebytes[2] == samebytes[3] == samebytes[4] == samebytes[5] == samebytes[6] and dec0bytes == 0xDEC0AD0B):
-        temp_parttype = 'uboot'
-        # в uboot партиции пропускаем первые 0x300 байт - пока что так
-        fin.seek(start_offset + 0x300, 0)
-        
-        # попадаем на начало структуры HEADINFO или по другому NVTPACK_BININFO_HDR:
-        # typedef struct _NVTPACK_BININFO_HDR {
-        #    unsigned int CodeEntry;     ///< [0x00] fw CODE entry (4) ----- r by Ld
-        #    unsigned int Resv1[19];     ///< [0x04~0x50] reserved (4*19) -- reserved, its mem value will filled by Ld
-        #    char BinInfo_1[8];          ///< [0x50~0x58] CHIP-NAME (8) ---- r by Ep
-        #    char BinInfo_2[8];          ///< [0x58~0x60] version (8)
-        #    char BinInfo_3[8];          ///< [0x60~0x68] release date (8)
-        #    unsigned int BinLength;     ///< [0x68] Bin File Length (4) --- w by Ep/bfc
-        #    unsigned int Checksum;      ///< [0x6c] Check Sum or CRC (4) ----- w by Ep/Epcrc
-        #    unsigned int CRCLenCheck;   ///< [0x70~0x74] Length check for CRC (4) ----- w by Epcrc (total len ^ 0xAA55)
-        #    unsigned int Resv2;         ///< [0x74~0x78] reserved (4) --- reserved for other bin tools
-        #    unsigned int BinCtrl;       ///< [0x78~0x7C] Bin flag (4) --- w by bfc
-        #    ///< BIT 0.compressed enable (w by bfc)
-        #    unsigned int CRCBinaryTag;  ///< [0x7C~0x80] Binary Tag for CRC (4) ----- w by Epcrc
-        #}
-        # потом нули и начиная с 0x1000 идут данные партиции
-        
-        code_entry = struct.unpack('<I', fin.read(4))[0] # code_entry_address
-        fin.seek(0x50 - 4, 1) # reserved
-        chip_name = str(struct.unpack('8s', fin.read(8))[0])[2:-1] #отрезает b` `
-        fin.seek(8, 1) # version = FFFFFFFF
-        release_date = str(struct.unpack('8s', fin.read(8))[0])[2:-1] #отрезает b` `
-        file_length = struct.unpack('<I', fin.read(4))[0] # in bytes, should be same as in FW_HDR2
-        if (struct.unpack('<H', fin.read(2))[0] == 0xAA55):
-            read_CRC = struct.unpack('<H', fin.read(2))[0] # считали CRC из смещения 0x36E
-            CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, part_size, 0x36E) # расчитаем CRC для данных партиции
-        else:
-            read_CRC = 0 # если признака наличия CRC (0xAA55) не нашли
-            CRC = 0
-        
-        temp_parttype += ' \"\033[93m' + chip_name + ' ' + release_date + '\033[0m\"'
-        
-        if addinfo:
-            part_type.append(temp_parttype)
-            part_crc.append(read_CRC)
-            part_crcCalc.append(CRC)
-            fin.close()
-        return temp_parttype, CRC
-    else:
-        fin.seek(start_offset + 4, 0) # seek back to file position right after partfirst4bytes was read
-
-
     # uImage header
         #https://github.com/EmcraftSystems/u-boot/blob/master/include/image.h
         #Legacy format image header,
@@ -2091,8 +2132,53 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
             fin.seek(-4, 1) # seek back
 
 
-    # check is this a MODELEXT header and MODELEXT info
+    # SquashFS - Little endian (73 71 73 68 or "hsqs") or Big endian (68 73 71 73 or "sqsh")
+    if partfirst4bytes == 0x73717368 or partfirst4bytes == 0x68737173:
+        temp_parttype = '\033[93mSquashFS'
 
+        inodeCount = struct.unpack('<I', fin.read(4))[0]
+        modificationTime = struct.unpack('<I', fin.read(4))[0]
+        blockSize = struct.unpack('<I', fin.read(4))[0]
+        fragmentCode = struct.unpack('<I', fin.read(4))[0]
+        compressionID = struct.unpack('<H', fin.read(2))[0]
+        blockLog = struct.unpack('<H', fin.read(2))[0]
+        flags = struct.unpack('<H', fin.read(2))[0]
+        idCount = struct.unpack('<H', fin.read(2))[0]
+
+        # squashFS version
+        majorVersion = struct.unpack('<H', fin.read(2))[0]
+        minorVersion = struct.unpack('<H', fin.read(2))[0]
+        temp_parttype += '(' + str(majorVersion) + '.' + str(minorVersion) + ')\033[0m'
+
+        # squashFS compression method
+        if compressionID == 1:
+            temp_parttype += '[\033[93mzlib\033[0m]'
+        if compressionID == 2:
+            temp_parttype += '[\033[93mLZMA\033[0m]'
+        if compressionID == 3:
+            temp_parttype += '[\033[93mLZO\033[0m]'
+        if compressionID == 4:
+            temp_parttype += '[\033[93mXZ\033[0m]'
+        if compressionID == 5:
+            temp_parttype += '[\033[93mLZ4\033[0m]'
+        if compressionID == 6:
+            temp_parttype += '[\033[93mZSTD\033[0m]'
+
+        rootInode = struct.unpack('<II', fin.read(8))[0]
+        bytesUsed = struct.unpack('<II', fin.read(8))[0]
+
+        temp_parttype += ' \033[93m{:,}\033[0m'.format(bytesUsed) + ' bytes'
+
+        CRC = 0
+        if addinfo:
+            part_type.append(temp_parttype)
+            part_crc.append(0)
+            part_crcCalc.append(CRC)
+            fin.close()
+        return temp_parttype, CRC
+
+
+    # check is this a MODELEXT header and MODELEXT info
     # class MODELEXT_HEADER(Structure): _fields_ = [
     #    ("size", c_uint),
     #    ("type", c_uint), // MODELEXT_TYPE_INFO = 1
@@ -2137,6 +2223,61 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
     else:
         # did not found MODELEXT, seek() back to partfirst4bytes after additional read() to valid read() and check in other cases
         fin.seek(start_offset + 4, 0)
+
+
+    # uboot
+    # if partID == 3: # ранее всегда 3 партиция - это uboot
+    # теперь либо по имени партиции либо чтобы 7 INT были одинаковы в начале
+    # ещё есть на 0x3C смещении 0xDEADBEEF
+    samebytes = struct.unpack('>7I', fin.read(4*7)) # все = 0x14F09FE5 или 0x18F09FE5
+    fin.seek(0x1C, 1)
+    deadbytes = struct.unpack('<I', fin.read(4))[0] # 0xDEADBEEF но в старых прошивках нет
+    dec0bytes = struct.unpack('>I', fin.read(4))[0] # 0xDEC0AD0B вроде везде есть
+    if (len(dtbpart_name) > partID and str(dtbpart_name[partID]).lower() == 'uboot') or (samebytes[0] == samebytes[1] == samebytes[2] == samebytes[3] == samebytes[4] == samebytes[5] == samebytes[6] and dec0bytes == 0xDEC0AD0B):
+        temp_parttype = 'uboot'
+        # в uboot партиции пропускаем первые 0x300 байт - пока что так
+        fin.seek(start_offset + 0x300, 0)
+        
+        # попадаем на начало структуры HEADINFO или по другому NVTPACK_BININFO_HDR:
+        # typedef struct _NVTPACK_BININFO_HDR {
+        #    unsigned int CodeEntry;     ///< [0x00] fw CODE entry (4) ----- r by Ld
+        #    unsigned int Resv1[19];     ///< [0x04~0x50] reserved (4*19) -- reserved, its mem value will filled by Ld
+        #    char BinInfo_1[8];          ///< [0x50~0x58] CHIP-NAME (8) ---- r by Ep
+        #    char BinInfo_2[8];          ///< [0x58~0x60] version (8)
+        #    char BinInfo_3[8];          ///< [0x60~0x68] release date (8)
+        #    unsigned int BinLength;     ///< [0x68] Bin File Length (4) --- w by Ep/bfc
+        #    unsigned int Checksum;      ///< [0x6c] Check Sum or CRC (4) ----- w by Ep/Epcrc
+        #    unsigned int CRCLenCheck;   ///< [0x70~0x74] Length check for CRC (4) ----- w by Epcrc (total len ^ 0xAA55)
+        #    unsigned int Resv2;         ///< [0x74~0x78] reserved (4) --- reserved for other bin tools
+        #    unsigned int BinCtrl;       ///< [0x78~0x7C] Bin flag (4) --- w by bfc
+        #    ///< BIT 0.compressed enable (w by bfc)
+        #    unsigned int CRCBinaryTag;  ///< [0x7C~0x80] Binary Tag for CRC (4) ----- w by Epcrc
+        #}
+        # потом нули и начиная с 0x1000 идут данные партиции
+        
+        code_entry = struct.unpack('<I', fin.read(4))[0] # code_entry_address
+        fin.seek(0x50 - 4, 1) # reserved
+        chip_name = str(struct.unpack('8s', fin.read(8))[0])[2:-1] #отрезает b` `
+        fin.seek(8, 1) # version = FFFFFFFF
+        release_date = str(struct.unpack('8s', fin.read(8))[0])[2:-1] #отрезает b` `
+        file_length = struct.unpack('<I', fin.read(4))[0] # in bytes, should be same as in FW_HDR2
+        if (struct.unpack('<H', fin.read(2))[0] == 0xAA55):
+            read_CRC = struct.unpack('<H', fin.read(2))[0] # считали CRC из смещения 0x36E
+            CRC = MemCheck_CalcCheckSum16Bit(in_file, start_offset, part_size, 0x36E) # расчитаем CRC для данных партиции
+        else:
+            read_CRC = 0 # если признака наличия CRC (0xAA55) не нашли
+            CRC = 0
+        
+        temp_parttype += ' \"\033[93m' + chip_name + ' ' + release_date + '\033[0m\"'
+        
+        if addinfo:
+            part_type.append(temp_parttype)
+            part_crc.append(read_CRC)
+            part_crcCalc.append(CRC)
+            fin.close()
+        return temp_parttype, CRC
+    else:
+        fin.seek(start_offset + 4, 0) # seek back to file position right after partfirst4bytes was read
 
 
     # unknown part
