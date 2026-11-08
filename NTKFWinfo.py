@@ -60,12 +60,13 @@
 # V7.3 - "-delete" command was implemented for remove partition. Now partition filename for "-add" command is optional (will use input filename + "-partitionID*" if not defined). It is also respect working dir if use with "-o" option.
 # V7.4 - 'Master Boot Record' partitions is detected now and number of partition records in it is displayed
 # V7.5 - Speed up code of checksums calculation in MemCheck_CalcCheckSum16Bit()
-# V7.6 - add SquashFS partitions uncompress/compress support
+# V7.6 - add CKSM<--SquashFS partitions uncompress/compress support
 # V7.7 - Initial support of Vueroid dashcams .dat FW update files (S1-4K, S1-QHD-INFINITE)
+# V7.8 - add support of Bootloader and RAW data as one of partitions (early supported as separate file only)
+# V7.9 - uncompress UBI<--SquashFS partitions data was added (only UBI<--UbiFS was implemented before)
 
-CURRENT_VERSION = '7.7'
+CURRENT_VERSION = '7.9'
 
-from genericpath import samefile
 import os, struct, sys, argparse, array
 from datetime import datetime, timezone
 import zlib
@@ -455,7 +456,7 @@ def compress_CKSM_UBI(part_nr, in2_file):
 
     # fix .sh file for ARM64 rootfs partition only: change compressior algo from "lzo" to "favor_lzo" to be more closer to original partition size than with "lzo"
     if (is_ARM64 == 1):
-        # Т.к. UBIname я нигде не храню, сделал проверку по pratition type
+        # Т.к. UBIname я нигде не храню, сделал проверку по partition type
         if dtbpart_name[part_id[part_nr]][:6] == 'rootfs':
             #print('Use favor_lzo instead lzo')
             subprocess.run('(cd ' + '\"' + in2_file + '/tempdir/tempfile/img-' + d + '\"' + ' && sed -i "s/-x lzo/-x favor_lzo/" create_ubi_img-' + d + '.sh)', shell=True)
@@ -599,6 +600,7 @@ def compress_CKSM_SquashFS(part_nr, in2_file):
     fin.seek(part_startoffset[part_nr] + 0x40, 0)
 
     FourCC = fin.read(4)
+    # SquashFS - Little endian (73 71 73 68 or "sqsh") or Big endian (68 73 71 73 or "hsqs")
     if struct.unpack('>I', FourCC)[0] != 0x73717368 and struct.unpack('>I', FourCC)[0] != 0x68737173:
         print('\033[91mNot SquashFS into CKSM partition, exit\033[0m')
         exit(0)
@@ -649,13 +651,13 @@ def compress_CKSM_SquashFS(part_nr, in2_file):
     fixCRC(part_id[part_nr])
 
 
-
-def compress_BCL(part_nr, in2_file):
+# sub_part_offset - смещение от начала партиции part_nr (к примеру = 0x40 для CKSM<--BCL1 или = 0 для просто BCL1 партиции)
+def compress_BCL(part_nr, in2_file, sub_part_offset=0):
     global in_file
     global FW_BOOTLOADER
 
     fin = open(in_file, 'rb')
-    fin.seek(part_startoffset[part_nr], 0)
+    fin.seek(part_startoffset[part_nr] + sub_part_offset, 0)
 
     FourCC = fin.read(4)
     if FourCC != b'BCL1':
@@ -668,7 +670,7 @@ def compress_BCL(part_nr, in2_file):
         exit(0)
 
     # compress uncomp_partitionID to comp_partitionID
-    BCL1_compress(part_nr, 0, in2_file)
+    BCL1_compress(part_nr, sub_part_offset, in2_file)
 
     comp_filename = in2_file.replace('uncomp_partitionID', 'comp_partitionID')
     # проверим прошла ли упаковка успешно
@@ -681,7 +683,7 @@ def compress_BCL(part_nr, in2_file):
     is_silent = 1
 
     # replace partition
-    partition_replace(part_id[part_nr], 0, comp_filename)
+    partition_replace(part_id[part_nr], sub_part_offset, comp_filename)
 
     # delete comp_partitionID file
     subprocess.run('rm -rf ' + '\"' + comp_filename + '\"', shell=True)
@@ -847,6 +849,179 @@ def compress_MODELEXT(part_nr, in2_file):
 
 
 
+# sub_part_offset - смещение от начала партиции part_nr (к примеру = 0x40 для CKSM<--UBI# или = 0 для просто UBI# партиции)
+def compress_UBI(part_nr, in2_file, sub_part_offset=0):
+    global in_file, is_ARM64
+
+    fin = open(in_file, 'rb')
+    fin.seek(part_startoffset[part_nr] + sub_part_offset, 0)
+
+    FourCC = fin.read(4)
+    if FourCC != b'UBI#':
+        print('\033[91mNot UBI# partition, exit\033[0m')
+        exit(0)
+
+    # check that it is a UBIFS inside of UBI#
+    fin.seek(part_startoffset[part_nr] + sub_part_offset + 0x41000, 0)
+    ubi_magic = struct.unpack('>I', fin.read(4))[0]
+    # SquashFS - Little endian (73 71 73 68 or "sqsh") or Big endian (68 73 71 73 or "hsqs")
+    if ubi_magic == 0x73717368 or ubi_magic == 0x68737173:
+        print('\033[91mUBI<--SquashFS compression is not supported yet, exit\033[0m')
+        # соберем директорию /mount в squashFS-партицию в виде файла tempfile но не будем его вставлять через замену партиции т.к. надо еще упаковать в UBI
+        compress_SquashFS(part_nr, in2_file, 0x41000, 0)
+        
+        exit(0)
+
+    # UBIFS
+    if ubi_magic != 0x31181006:
+        print('\033[91mUnknown type inside of UBI#, exit\033[0m')
+        exit(0)
+
+    # для UBI на вход должна подаваться папка партиции, а не файл
+    if not os.path.exists(in2_file):
+        print('\033[91m%s folder does not found, exit\033[0m' % in2_file)
+        exit(0)
+
+    # extract UBI partition to tempfile
+    fin.seek(part_startoffset[part_nr] + sub_part_offset, 0)
+    finread = fin.read(part_size[part_nr] - sub_part_offset)
+    fin.close()
+    fpartout = open(in2_file + '/tempfile', 'w+b')
+    fpartout.write(finread)
+    fpartout.close()
+
+    # delete temp dir for info - ubireader require clear folder
+    subprocess.run('rm -rf ' + '\"' + in2_file + '/tempdir' + '\"', shell=True)
+
+    # get info about UBI to compressing script
+    subprocess.check_output('ubireader_utils_info ' + '-o ' + '\"' + in2_file + '/tempdir' + '\"' + ' ./' + '\"' + in2_file + '/tempfile' + '\"', shell=True)
+
+    # delete tempfile
+    subprocess.run('rm ' + '\"' + in2_file + '/tempfile' + '\"', shell=True)
+    
+    # получим имя папки в которую была распакована партиция (пока я видел чисто цифровые имена, тоже что и image_seq -Q в выводе ubireader_utils_info)
+    d = os.popen('(cd ' + '\"' + in2_file + '\"' + '&& find -maxdepth 1 -wholename "./*" -not -wholename "./temp*" -type d)').read()
+
+    # проверим что нашли
+    if not os.path.exists(in2_file + d[1:-1]):
+        print('\033[91mNo input valid folder in %s found, exit\033[0m' % in2_file)
+        exit(0)
+
+    # d[2:-1] уберем ./ в начале и новую строку в конце имени папки
+    d = d[2:-1]
+
+    # fix ini-file: delete line "vol_flags=0" it cause error "unknown flags"
+    subprocess.run('(cd ' + '\"' + in2_file + '/tempdir/tempfile/img-' + d + '\"' + ' && sed -i "/vol_flags = 0/d" img-' + d + '.ini)', shell=True)
+
+    # fix .sh file for ARM64 rootfs partition only: change compressior algo from "lzo" to "favor_lzo" to be more closer to original partition size than with "lzo"
+    if (is_ARM64 == 1):
+        # Т.к. UBIname я нигде не храню, сделал проверку по partition type
+        if dtbpart_name[part_id[part_nr]][:6] == 'rootfs':
+            #print('Use favor_lzo instead lzo')
+            subprocess.run('(cd ' + '\"' + in2_file + '/tempdir/tempfile/img-' + d + '\"' + ' && sed -i "s/-x lzo/-x favor_lzo/" create_ubi_img-' + d + '.sh)', shell=True)
+
+    # run compilation dir to ubi script
+    subprocess.run('(cd ' + '\"' + in2_file + '/tempdir/tempfile/img-' + d + '\"' + ' && sudo ./create_ubi_img-' + d + '.sh ../../../' + d + '/*)', shell=True)
+
+    # hide output print
+    global is_silent
+    is_silent = 1
+
+    # replace partition
+    partition_replace(part_id[part_nr], sub_part_offset, in2_file + '/tempdir/tempfile/img-' + d + '/img-' + d + '.ubi')
+
+    # delete temp dir for info
+    subprocess.run('rm -rf ' + '\"' + in2_file + '/tempdir' + '\"', shell=True)
+
+    # fix CRC
+    is_silent = -1
+    fixCRC(part_id[part_nr])
+
+
+
+# sub_part_offset - смещение от начала партиции part_nr (к примеру = 0x40 для CKSM<--UBI# или = 0 для просто UBI# партиции)
+def compress_SquashFS(part_nr, in2_file, sub_part_offset=0, is_partition_replace=0):
+    global in_file
+
+    fin = open(in_file, 'rb')
+    fin.seek(part_startoffset[part_nr] + sub_part_offset, 0)
+
+    FourCC = fin.read(4)
+
+    # SquashFS - Little endian (73 71 73 68 or "sqsh") or Big endian (68 73 71 73 or "hsqs")
+    if struct.unpack('>I', FourCC)[0] != 0x73717368 and struct.unpack('>I', FourCC)[0] != 0x68737173:
+        print('\033[91mNot SquashFS partition, exit\033[0m')
+        exit(0)
+
+    # для SquashFS на вход должна подаваться папка партиции, а не файл
+    if not os.path.exists(in2_file + '/mount'):
+        print('\033[91m%s folder does not found, exit\033[0m' % in2_file + '/mount')
+        exit(0)
+
+    # read original SquashFS partition params
+    inode_count = struct.unpack('<I', fin.read(4))[0]
+    modificationTime = struct.unpack('<I', fin.read(4))[0]
+    block_size = struct.unpack('<I', fin.read(4))[0]
+    fragments_count = struct.unpack('<I', fin.read(4))[0]
+    compressionID = struct.unpack('<H', fin.read(2))[0]
+    if compressionID == 1:
+        squashfs_comp_algo = 'gzip'
+    if compressionID == 2:
+        squashfs_comp_algo = 'lzma'
+    if compressionID == 3:
+        squashfs_comp_algo = 'lzo'
+    if compressionID == 4:
+        squashfs_comp_algo = 'xz'
+    if compressionID == 5:
+        squashfs_comp_algo = 'lz4'
+    if compressionID == 6:
+        squashfs_comp_algo = 'zstd'
+
+    if (compressionID < 1 or compressionID > 6):
+        print('\033[91m%s comp algo for squashfs is unknown, exit\033[0m' % compressionID)
+        exit(0)
+
+    block_size_log = struct.unpack('<H', fin.read(2))[0]
+    flags = struct.unpack('<H', fin.read(2))[0]
+    '''
+    -noI                    do not compress inode table
+    -noId                   do not compress the uid/gid table (implied by -noI)
+    -noD                    do not compress data blocks
+    -noF                    do not compress fragment blocks
+    -noX                    do not compress extended attributes
+    -no-compression         do not compress any of the data or metadata.  This is equivalent to specifying -noI -noD -noF and -noX
+    '''
+    squashFS_flags = '' # флаги для mksquashfs
+    if flags&0x0001 !=0: squashFS_flags += '-noI '
+    if flags&0x0002 !=0: squashFS_flags += '-noD '
+    if flags&0x0008 !=0: squashFS_flags += '-noF '
+    if flags&0x0100 !=0: squashFS_flags += '-noX '
+    if flags&0x0800 !=0: squashFS_flags += '-noId '
+    if squashFS_flags != '': squashFS_flags = squashFS_flags[:-1] # remove last space
+
+    # use mksquashfs to build a new squashfs partition from "/mount" folder to "tempfile" file
+    subprocess.run('sudo mksquashfs ' + '\"' + in2_file + '/mount' + '\"' + ' ' + '\"' + in2_file + '/tempfile' + '\"' + ' -comp ' + squashfs_comp_algo + ' -b ' + str(block_size) + squashFS_flags + ' -mkfs-time ' + str(modificationTime) + ' -quiet -no-progress -noappend', shell=True)
+
+    # если не нужно заменять партицию (например в случае UBI<--squashFS)
+    if is_partition_replace == 0: return
+
+    # hide output print
+    global is_silent
+    is_silent = 1
+
+    # replace partition
+    partition_replace(part_id[part_nr], sub_part_offset, in2_file + '/tempfile')
+
+    # удалим всю директорию
+    # delete tempfile & /mount folder
+    os.system('rm -rf ' + '\"' + in2_file + '\"')
+
+    # fix CRC
+    is_silent = -1
+    fixCRC(part_id[part_nr])
+
+
+
 def compress(part_nr, in2_file):
     global in_file
 
@@ -895,6 +1070,12 @@ def compress(part_nr, in2_file):
             compress_FDT(part_nr, in2_file)
             return
 
+        # UBI#
+        if FourCC == b'UBI#':
+            fin.close()
+            compress_UBI(part_nr, in2_file)
+            return
+        
         # MODELEXT
         MODELEXT_TYPE = struct.unpack('<I', fin.read(4))[0]
         fin.read(4)
@@ -1386,20 +1567,58 @@ def uncompress(in_offset, out_filename, size):
         os.system('sudo rm -rf ' + '\"' + out_filename + '\"')
         os.system('mkdir ' + '\"' + out_filename + '\"')
 
-        #extract UBI partition to tempfile
-        fin.seek(in_offset, 0)
-        finread = fin.read(size)
-        fin.close()
-        fpartout = open(out_filename + '/tempfile', 'w+b')
-        fpartout.write(finread)
-        fpartout.close()
+        # внутри UBI может быть не только UBIFS но и squashFS (а может и что-то еще) - проверим
+        # смотрим по смещению 0x41000 от начала UBI#
+        fin.seek(0x41000 - 4, 1)
+        ubi_magic = struct.unpack('>I', fin.read(4))[0]
 
-        #unpack UBIFS to created dir
-        os.system('sudo ubireader_extract_files -k -i -f ' + '-o ' + '\"' + out_filename + '\"' + ' ' + '\"' + out_filename + '/tempfile' + '\"')
+        # SquashFS - Little endian (73 71 73 68 or "sqsh") or Big endian (68 73 71 73 or "hsqs")
+        if ubi_magic == 0x73717368 or ubi_magic == 0x68737173:
+            #extract UBI partition to tempfile
+            fin.seek(in_offset, 0)
+            finread = fin.read(size)
+            fin.close()
+            fpartout = open(out_filename + '/tempfile', 'w+b')
+            fpartout.write(finread)
+            fpartout.close()
+
+            # Извлечем внутренности UBI
+            os.system('sudo ubireader_extract_images -i -f ' + '-o ' + '\"' + out_filename + '/tempdir' + '\"' + ' ' + '\"' + out_filename + '/tempfile' + '\"')
+            
+            # получим имя файла в которую была распакована UBI
+            d = os.popen('(cd ' + '\"' + out_filename + '/tempdir/tempfile' + '\"' + '&& find -maxdepth 1 -wholename "./*" -not -wholename "./temp*" -type f)').read()
+            # проверим что нашли
+            if not os.path.exists(out_filename + '/tempdir/tempfile' + d[1:-1]):
+                print('\033[91mNo output valid temp folder in %s found, exit\033[0m' % out_filename)
+                exit(0)
+            # d[2:-1] уберем ./ в начале и новую строку в конце имени файла в котором squashFS
+            d = d[2:-1]
+
+            # вывод инфо куда распаковываем squashFS (а у UbiFS это выводит сама команда ubireader_extract_files)
+            print('Extracting files to:', out_filename + '/mount')
+            # unpack squashfs to folder '/mount'
+            os.system('sudo unsquashfs -q -n -f -d ' + '\"' + out_filename + '/mount' + '\"' + ' ' + '\"' + out_filename + '/tempdir/tempfile/' + d + '\"')
+            # delete tempdir
+            os.system('rm -rf ' + '\"' + out_filename + '/tempdir' + '\"')
+
+
+        # UBIFS
+        if ubi_magic == 0x31181006:
+            #extract UBI partition to tempfile
+            fin.seek(in_offset, 0)
+            finread = fin.read(size)
+            fin.close()
+            fpartout = open(out_filename + '/tempfile', 'w+b')
+            fpartout.write(finread)
+            fpartout.close()
+
+            #unpack UBIFS to created dir
+            os.system('sudo ubireader_extract_files -k -i -f ' + '-o ' + '\"' + out_filename + '\"' + ' ' + '\"' + out_filename + '/tempfile' + '\"')
 
         # delete tempfile
         os.system('rm -rf ' + '\"' + out_filename + '/tempfile' + '\"')
         return
+
 
     # SPARSE EXT4
     if struct.unpack('>I', FourCC)[0] == 0x3AFF26ED:
@@ -1427,7 +1646,7 @@ def uncompress(in_offset, out_filename, size):
         os.system('rm -rf ' + '\"' + out_filename + '/tempfile' + '\"')
         return
 
-    # SquashFS
+    # SquashFS - Little endian (73 71 73 68 or "sqsh") or Big endian (68 73 71 73 or "hsqs")
     if struct.unpack('>I', FourCC)[0] == 0x73717368 or struct.unpack('>I', FourCC)[0] == 0x68737173:
         #create dir with similar name as for other parttition types
         os.system('rm -rf ' + '\"' + out_filename + '\"')
@@ -2064,6 +2283,23 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
         fin.seek(-1*(id_length+1), 1) # вернемся на начало имени id
         # считаем имя
         UBIname = str(struct.unpack('%ds' % (id_length), fin.read(id_length))[0])[2:-1] #отрезает b` `
+
+        # внутри UBI может быть не только UBIFS но и squashFS (а может и что-то еще) - проверим
+        # смотрим по смещению 0x41000 от начала UBI#
+        uiDataOffset = 0x41000
+        fin.seek(start_offset + uiDataOffset, 0)
+        ubi_magic = struct.unpack('>I', fin.read(4))[0]
+
+        # SquashFS - Little endian (73 71 73 68 or "sqsh") or Big endian (68 73 71 73 or "hsqs")
+        if ubi_magic == 0x73717368 or ubi_magic == 0x68737173:
+            #temp_parttype += ' \033[93mSquashFS\033[0m'
+            # смотрим что внутри так - больше данных получим о squashFS
+            deeppart, calcCRC = GetPartitionInfo(start_offset + uiDataOffset, part_size - uiDataOffset, partID, 0) # внетренние данные не считаем за отдельную партицию поэтому 0
+            if deeppart != '':
+                temp_parttype += '\033[94m<--\033[0m' + deeppart
+        if ubi_magic == 0x31181006:
+            temp_parttype += '\033[94m<--\033[0m\033[93mUbiFS\033[0m' # <--UbiFS
+
         # добавим считанное в тип партиции
         temp_parttype += ' \"\033[93m' + UBIname + '\033[0m\"'
         CRC = 0
@@ -2088,10 +2324,10 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
 
             temp_parttype = '\033[93mCKSM\033[0m'
             # как оказалось везде проставлен один тип 09=UBIFS - даже если внутри CKSM лежит BCL1
-            if uiEmbType in embtypes:
-                temp_parttype += ' ' + embtypes[uiEmbType]
-            else:
-                temp_parttype += ' \033[91munkEmbType\033[0m' # unknown embedded type of data
+            #if uiEmbType in embtypes:
+            #    temp_parttype += ' ' + embtypes[uiEmbType]
+            #else:
+            #    temp_parttype += ' \033[91munkEmbType\033[0m' # unknown embedded type of data
 
             # смотрим что внутри CKSM
             deeppart, calcCRC = GetPartitionInfo(start_offset + uiDataOffset, uiDataSize + uiPaddingSize, partID, 0) # внетренние данные не считаем за отдельную партицию поэтому 0
@@ -2110,7 +2346,7 @@ def GetPartitionInfo(start_offset, part_size, partID, addinfo = 1):
             fin.seek(-4, 1) # seek back
 
 
-    # SquashFS - Little endian (73 71 73 68 or "hsqs") or Big endian (68 73 71 73 or "sqsh")
+    # SquashFS - Little endian (73 71 73 68 or "sqsh") or Big endian (68 73 71 73 or "hsqs")
     if partfirst4bytes == 0x73717368 or partfirst4bytes == 0x68737173:
         temp_parttype = '\033[93mSquashFS'
 
