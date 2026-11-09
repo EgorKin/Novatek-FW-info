@@ -64,8 +64,9 @@
 # V7.7 - Initial support of Vueroid dashcams .dat FW update files (S1-4K, S1-QHD-INFINITE)
 # V7.8 - add support of Bootloader and RAW data as one of partitions (early supported as separate file only)
 # V7.9 - uncompress UBI<--SquashFS partitions data was added (only UBI<--UbiFS was implemented before)
+# V8.0 - Vueroid .dat files last byte checksum calc and fix is added
 
-CURRENT_VERSION = '7.9'
+CURRENT_VERSION = '8.0'
 
 import os, struct, sys, argparse, array
 from datetime import datetime, timezone
@@ -95,6 +96,7 @@ dtbpart_name = []
 dtbpart_filename = []
 
 is_ARM64 = 0 # unknown by default, flag for apply favor_lzo compression algo in UBI rootfs partition
+is_Vueroid = 0 # у него CRC всего файла считается по своему
 
 # defines from SDKs
 NVTPACK_CHKSUM_HDR_VERSION = 0x16040719
@@ -396,6 +398,22 @@ def MemCheck_CalcCheckSum16Bit(input_file, in_offset, uiLen, ignoreCRCoffset):
     #print('Final CRC=0x%08X' % uiSum)
 
     return uiSum
+
+
+
+def MemCheck_CalcCheckSum8Bit(input_file):
+    # Читаем все байты файла, кроме самого последнего
+    total_file_size = os.path.getsize(input_file)
+    with open(in_file, 'rb') as f:
+        data = f.read(total_file_size - 1)
+        
+    # Считаем сумму всех байтов по модулю 256
+    total_sum = sum(data) & 0xFF
+
+    # Вычисляем корректирующий байт, чтобы итоговая сумма стала равна 0x00
+    # Формула: (0x00 - total_sum) & 0xFF
+    target_value = 0x00 
+    return (target_value - total_sum) & 0xFF
 
 
 
@@ -3063,6 +3081,7 @@ def main():
     global NVTPACK_FW_HDR_AND_PARTITIONS_size
     global workdir
     global console_width, console_height
+    global is_Vueroid
 
 
     # for color output support in Windows
@@ -3419,10 +3438,21 @@ def main():
                     if struct.unpack('>I', fin.read(4))[0] == 0x02C02EC7 and struct.unpack('>I', fin.read(4))[0] == 0xAA55AA55 and\
                     fin.read(3) == b'\xAA\x55\xAA' and struct.unpack('>I', fin.read(4))[0] == 0x02C02EC7:
                         print('Input file detects as \033[93mVueroid FW\033[0m', end='')
+                        is_Vueroid = 1
+                        checksum_value = struct.unpack('B', fin.read(1))[0] # считали CRC всего файла - последний байт
+
                         fin.seek(0, 0)
                         print(': model:' + str(struct.unpack('16s', fin.read(16))[0].rstrip(b'\x00'))[2:-1], end='') # отрезает b` ` и нулевые байты в конце
                         print(', ver:' + str(struct.unpack('16s', fin.read(16))[0].rstrip(b'\x00'))[2:-1]) # отрезает b` ` и нулевые байты в конце
 
+                        # если есть команда извлечь или заменить или распаковать или запаковать партицию то CRC не считаем чтобы не тормозить
+                        if (is_extract == -1 & is_replace == -1 & is_uncompress == -1 & is_compress == -1):
+                            CRC_FW = MemCheck_CalcCheckSum8Bit(in_file)
+                            if checksum_value == CRC_FW:
+                                print('Vueroid .dat file ORIG_CRC:\033[93m0x%02X\033[0m CALC_CRC:\033[92m0x%02X\033[0m' % (checksum_value, CRC_FW))
+                            else:
+                                print('Vueroid .dat file ORIG_CRC:\033[93m0x%02X\033[0m CALC_CRC:\033[91m0x%02X\033[0m' % (checksum_value, CRC_FW))
+                        
                         # считываем таблицу партиций пока не упрёмся в первую партицию (она должна идти сразу после таблицы партиций)
                         #fin.seek(0x20, 0) и так тут
                         for a in range(0, 9999):
@@ -3829,6 +3859,17 @@ def main():
                         fin.write(struct.pack('<H', CRC_FW))
                         fin.close()
                         print('Bootloader file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[91m0x%04X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
+                else:
+                    if is_Vueroid == 1:
+                        CRC_FW = MemCheck_CalcCheckSum8Bit(in_file)
+                        if checksum_value == CRC_FW:
+                            print('Vueroid .dat file ORIG_CRC:\033[93m0x%04X\033[0m CALC_CRC:\033[92m0x%04X\033[0m' % (checksum_value, CRC_FW))
+                        else:
+                            fin = open(in_file, 'r+b')
+                            fin.seek(-1, 2)
+                            fin.write(struct.pack('B', CRC_FW))
+                            fin.close()
+                            print('Vueroid .dat file ORIG_CRC:\033[93m0x%02X\033[0m CALC_CRC:\033[91m0x%02X\033[0m, \033[94mCRC fixed\033[0m' % (checksum_value, CRC_FW))
     # exit не делаем чтобы показать информацию по партициям и где CRC были исправлены
 
 
