@@ -3885,7 +3885,8 @@ def main():
         print(' ' + '-'*((console_width - 2 - len(str_header))//2) + str_header + '-'*((console_width - 2 - len(str_header))//2))
 
         # если что-то нашли в dtb то выводим расширенную информацию с именами партиций
-        if len(dtbpart_name) != 0:
+        # у Vueroid после packbin в заголовке таблица партиций без id партиции - поэтому имена не сопоставить
+        if len(dtbpart_name) != 0 and is_Vueroid == 0:
             print('|  ID   NAME            START_OFFSET  END_OFFSET         SIZE       ORIG_CRC   CALC_CRC              TYPE              ' + ' '*(console_width - 2 - 118) + '|')
         else:
             print('|  ID   START_OFFSET  END_OFFSET         SIZE       ORIG_CRC   CALC_CRC                        TYPE                    ' + ' '*(console_width - 2 - 118) + '|')
@@ -3900,7 +3901,7 @@ def main():
                 color = '91m' # red
             
             # если что-то нашли в dtb то выводим расширенную информацию с именами партиций
-            if len(dtbpart_name) != 0:
+            if len(dtbpart_name) != 0 and is_Vueroid == 0:
                 # есть ли такой индекс в именах партиций
                 if len(dtbpart_name) > part_id[a]:
                     curr_partition_name = dtbpart_name[part_id[a]]
