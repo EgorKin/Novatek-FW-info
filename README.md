@@ -33,6 +33,7 @@ Supports a comprehensive range of Novatek SoCs from the outdated GitUp Git1 and 
 * **GitUp:** Git1, Git2, Git3
 * **Viofo:** A119, A129/Pro, A139, A229 Plus/Pro/Ultra, A329/S/T
 * **Vantrue:** Element series (E1, E2, E3), Nexus series (N4 Pro, N5), E360, F1, S1
+* **70mai:** 70mai_Pro Plus+ and others
 * and some others
 
 
